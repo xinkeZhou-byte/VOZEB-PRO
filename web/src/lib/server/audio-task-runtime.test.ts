@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/server/safe-outbound-fetch", () => ({ fetchSafeOutbound: (url: string | URL, init?: RequestInit) => fetch(url, init) }));
+vi.mock("@/lib/server/internal-origin", async () => ({ ...(await vi.importActual<typeof import("@/lib/server/internal-origin")>("@/lib/server/internal-origin")), fetchInternalApi: (url: string | URL, init?: RequestInit) => fetch(url, init) }));
 vi.mock("@/lib/server/generation-media-authorization", () => ({ generationMediaProxyHeaders: vi.fn(() => ({ "x-media-auth": "signed" })) }));
 
 const mocks = vi.hoisted(() => ({
@@ -25,7 +26,7 @@ vi.mock("@/lib/server/reference-asset-store", () => ({ writePersistentMediaDataU
 
 import { createProtocolFixtureServer } from "../../../scripts/protocol-fixture-server.mjs";
 import { GenerationSubmissionUncertainError } from "./generation-submission-error";
-import { createAudioTaskUpstreamStep, markAudioTaskFailed } from "./audio-task-runtime";
+import { createAudioTaskUpstreamStep, queryAudioTaskUpstreamStep, markAudioTaskFailed } from "./audio-task-runtime";
 import type { AudioTask } from "./audio-task-store";
 import { emptyAdvancedConfig, protocolModelConfig, registeredChannelProtocolDefinitions } from "@/lib/channel-protocol-registry";
 
@@ -84,6 +85,19 @@ describe("audio task runtime submission safety", () => {
 
         expect(state.upstream).toEqual({ id: "audio-upstream-one", createPath: "/audio/speech" });
         expect(mocks.schedule).toHaveBeenLastCalledWith("audio", "audio-one", expect.objectContaining({ executionPhase: "submitted", upstreamTaskId: "audio-upstream-one", channelId: "channel-one", lastUpstreamStatus: "submitted" }));
+    });
+
+    it("sends historic transport identity only after an audio task has an upstream identity", async () => {
+        state = { ...audioTask(), config: { ...audioTask().config, baseUrl: "/api/ai/system/channel-one" }, candidateConfigs: [] };
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(Response.json({ id: "audio-upstream-one" }))
+            .mockResolvedValueOnce(Response.json({ status: "processing" }));
+        vi.stubGlobal("fetch", fetchMock);
+        expect(await createAudioTaskUpstreamStep(state, "http://internal")).toMatchObject({ state: "pending" });
+        expect(new Headers(fetchMock.mock.calls[0][1].headers).has("x-vozeb-pro-generation-task")).toBe(false);
+        expect(await queryAudioTaskUpstreamStep(state, "http://internal")).toMatchObject({ state: "pending", upstreamTaskId: "audio-upstream-one" });
+        expect(new Headers(fetchMock.mock.calls[1][1].headers).get("x-vozeb-pro-generation-task")).toBe("audio:audio-one");
     });
 
     it("does not persist an HTML fallback page as generated audio", async () => {

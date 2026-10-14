@@ -17,6 +17,7 @@ vi.mock("@/lib/auth/session", () => ({ getCurrentUser: vi.fn(async () => ({ id: 
 vi.mock("@/lib/auth/store", () => ({
     consumeUserPoints: mocks.consumeUserPoints,
     getAuthSettings: mocks.getAuthSettings,
+    getFreshAuthSettings: mocks.getAuthSettings,
     isAuthInputError: (error: unknown) => Boolean(error && typeof error === "object" && "status" in error),
     isQuotaExceededError: vi.fn(() => false),
     refundUserPoints: mocks.refundUserPoints,

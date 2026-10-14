@@ -34,7 +34,7 @@ export function authorizeSystemAiProxyRequest(input: ProxyPolicyInput): SystemAi
 
     const upstreamModel = normalizeModel(input.upstreamModel);
     if (!upstreamModel) return denied(400, "系统模型代理缺少上游模型标识");
-    const logical = resolveBoundLogicalModel(input.logicalModels, input.channelId, upstreamModel, input.preferredLogicalModelId);
+    const logical = resolveBoundLogicalModel(input.logicalModels, input.channelId, upstreamModel, input.preferredLogicalModelId, true);
     if (!logical) return denied(403, "该上游模型未绑定可用逻辑模型");
 
     const candidates = requestPathCandidates(input.path, input.search);
@@ -59,6 +59,7 @@ export function authorizeSystemAiProxyRequest(input: ProxyPolicyInput): SystemAi
 
     const createPaths = [...(input.paths?.create || []), ...standardCreatePaths(logical.capability, input.apiFormat)];
     if (method === "POST" && createPaths.some((path) => pathMatchesAny(candidates, path, upstreamModel))) {
+        if (!resolveBoundLogicalModel(input.logicalModels, input.channelId, upstreamModel, input.preferredLogicalModelId)) return denied(403, "该上游模型未绑定可用逻辑模型");
         if (!input.pointsUsageKind || input.pointsUsageKind === "api") return denied(400, "系统模型创建请求无法确定计费类型");
         if (input.pointsUsageKind !== logical.capability) return denied(403, "请求能力与逻辑模型不匹配");
         return allowed(logical, "create");
@@ -67,8 +68,10 @@ export function authorizeSystemAiProxyRequest(input: ProxyPolicyInput): SystemAi
     return denied(404, "系统模型代理路径未获授权");
 }
 
-function resolveBoundLogicalModel(logicalModels: LogicalModel[], channelId: string, upstreamModel: string, preferredLogicalModelId = "") {
-    const matches = logicalModels.filter((logical) => logical.enabled && logical.bindings.some((binding) => binding.enabled && binding.channelId === channelId && normalizeModel(binding.upstreamModel) === upstreamModel));
+function resolveBoundLogicalModel(logicalModels: LogicalModel[], channelId: string, upstreamModel: string, preferredLogicalModelId = "", includeDisabled = false) {
+    const matches = logicalModels.filter(
+        (logical) => (includeDisabled || logical.enabled) && logical.bindings.some((binding) => (includeDisabled || binding.enabled) && binding.channelId === channelId && normalizeModel(binding.upstreamModel) === upstreamModel),
+    );
     const preferred = preferredLogicalModelId.trim().toLowerCase();
     if (preferred) return matches.find((logical) => logical.id.toLowerCase() === preferred) || null;
     return matches.sort((left, right) => left.id.localeCompare(right.id))[0] || null;

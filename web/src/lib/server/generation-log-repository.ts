@@ -7,6 +7,8 @@ import type { GenerationLogReferenceSnapshot, GenerationLogRequestSnapshot, Gene
 import { isPostgresDatabaseEnabled, type QueryExecutor } from "@/lib/server/database";
 import { readJsonDataFile, withJsonDataFileLock, writeJsonDataFile } from "@/lib/server/data-adapter";
 import { normalizeGeneratedImageBytes } from "@/lib/server/generated-image-normalizer";
+import { GenerationResultError, resultPersistenceStage } from "@/lib/server/generation-result-error";
+import { normalizeGenerationCallAudits } from "@/lib/server/generation-call-audit-service";
 import { resolveMediaMimeType } from "@/lib/server/media-content-type";
 import { createDatedMediaPath, GENERATION_MEDIA_ROOT } from "@/lib/server/local-media-storage";
 import { deleteLocalMediaRegistrations, getLocalMediaRegistration, registerLocalMediaAsset } from "@/lib/server/local-media-registry";
@@ -48,7 +50,7 @@ export function isGenerationStatus(value?: string): value is GenerationLogStatus
     return value === "pending" || value === "success" || value === "failed";
 }
 
-type GenerationAssetContext = { ownerUserId: string; source: string; conversationId?: string; taskId?: string; originalName?: string; targetSize?: string; assetIndex?: number; assetCount?: number };
+type GenerationAssetContext = { ownerUserId: string; source: string; conversationId?: string; runId?: string; taskId?: string; originalName?: string; targetSize?: string; assetIndex?: number; assetCount?: number; storageKey?: string };
 
 export async function normalizeAssets(assets: Array<Partial<GenerationLogAsset> & { url?: string; targetSize?: string }>, context: GenerationAssetContext) {
     const normalized: GenerationLogAsset[] = [];
@@ -113,8 +115,8 @@ export async function writeRemoteAsset(url: string, type: GenerationLogKind, con
         const mimeType = await resolveMediaMimeType(bytes, type, response.headers.get("content-type"));
         if (!mimeType) return null;
         return writeAssetBytes(bytes, mimeType, type, context);
-    } catch {
-        return null;
+    } catch (error) {
+        throw new GenerationResultError("media_read", error);
     } finally {
         clearTimeout(timer);
     }
@@ -125,11 +127,13 @@ export async function isSafeRemoteAssetUrl(value: string) {
 }
 
 export async function writeAssetBytes(bytes: Buffer, mimeType: string, type: GenerationLogKind, context: GenerationAssetContext): Promise<GenerationLogAsset> {
-    const normalized: { bytes: Buffer; mimeType: string; width?: number; height?: number } = type === "image" ? await normalizeGeneratedImageBytes(bytes, mimeType, context.targetSize) : { bytes, mimeType };
+    const normalized: { bytes: Buffer; mimeType: string; width?: number; height?: number } = type === "image" ? await resultPersistenceStage("image_process", () => normalizeGeneratedImageBytes(bytes, mimeType, context.targetSize)) : { bytes, mimeType };
     bytes = normalized.bytes;
     mimeType = normalized.mimeType;
     const extension = extensionFromMime(mimeType, type);
-    const relativePath = createDatedMediaPath("permanent", type, extension);
+    const relativePath = context.storageKey || createDatedMediaPath("permanent", type, extension);
+    const filePath = resolve(ASSET_ROOT, relativePath);
+    if (!filePath.startsWith(`${resolve(ASSET_ROOT)}${sep}`)) throw new Error("媒体存储路径无效");
     const registration = {
         storageKey: relativePath,
         scope: "generation" as const,
@@ -139,18 +143,20 @@ export async function writeAssetBytes(bytes: Buffer, mimeType: string, type: Gen
         originalName: generationAssetFileName(context, mimeType),
         source: context.source,
         conversationId: context.conversationId,
+        runId: context.runId,
         taskId: context.taskId,
         mimeType,
         bytes: bytes.length,
     };
-    const external = await persistExternalMediaIfEnabled({ registration, bytes });
+    const external = await resultPersistenceStage("file_save", () => persistExternalMediaIfEnabled({ registration, bytes }));
     const serverUrl = `/api/generation-log-assets/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
     if (external) return { type, url: serverUrl, serverUrl, mimeType, bytes: bytes.length, width: normalized.width, height: normalized.height };
-    const filePath = resolve(ASSET_ROOT, relativePath);
-    await mkdir(dirname(filePath), { recursive: true });
-    await writeFile(filePath, bytes);
+    await resultPersistenceStage("file_save", async () => {
+        await mkdir(dirname(filePath), { recursive: true });
+        await writeFile(filePath, bytes);
+    });
     try {
-        await registerLocalMediaAsset(registration);
+        await resultPersistenceStage("asset_register", () => registerLocalMediaAsset(registration));
     } catch (error) {
         await unlink(filePath).catch(() => undefined);
         throw error;
@@ -509,8 +515,9 @@ export function normalizeGenerationLogRequestSnapshot(value: unknown): Generatio
     const parameters = normalizeSnapshotParameters(source.parameters);
     const references = Array.isArray(source.references) ? source.references.flatMap(normalizeSnapshotReference) : [];
     const slots = Array.isArray(source.slots) ? source.slots.flatMap(normalizeSnapshotSlot) : [];
-    if (!userPrompt && !Object.keys(parameters).length && !references.length && !slots.length) return undefined;
-    return { version: 1, ...(userPrompt ? { userPrompt } : {}), parameters, references, slots };
+    const callAudit = normalizeGenerationCallAudits(source.callAudit);
+    if (!userPrompt && !Object.keys(parameters).length && !references.length && !slots.length && !callAudit.length) return undefined;
+    return { version: 1, ...(userPrompt ? { userPrompt } : {}), parameters, references, slots, ...(callAudit.length ? { callAudit } : {}) };
 }
 
 function normalizeSnapshotParameters(value: unknown): GenerationLogSnapshotParameters {

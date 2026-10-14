@@ -1,5 +1,6 @@
 import { getDatabaseProvider, ensurePostgresSchema, postgresQuery, withPostgresTransaction } from "@/lib/server/database";
 import { resolveGenerationReviewReason } from "@/lib/server/generation-task-review-reason";
+import { notifyGenerationTaskChange } from "@/lib/server/generation-task-event-signal";
 import { readJsonDataFile, withJsonDataFileLock, writeJsonDataFile } from "@/lib/server/data-adapter";
 import type {
     GenerationTaskContext,
@@ -103,6 +104,19 @@ export async function listStoredGenerationTaskRecordsByRunIds(runIds: string[], 
     return (await readFileTasks())
         .filter((task) => task.expiresAt > Date.now() && task.type !== "agent" && task.runId && ids.includes(task.runId) && (!owners.length || owners.includes(task.userId)))
         .sort((left, right) => String(left.runId).localeCompare(String(right.runId)) || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+}
+
+export async function listStoredGenerationTaskRecordsByLogIds(logIds: string[]) {
+    const ids = [...new Set(logIds.map(cleanContextText).filter(Boolean))];
+    if (!ids.length) return [];
+    if (getDatabaseProvider() === "postgres") {
+        await ensurePostgresSchema();
+        const result = await postgresQuery<Record<string, unknown>>("SELECT * FROM generation_tasks WHERE expires_at > now() AND (payload->>'generationLogId' = ANY($1::text[]) OR task_type || '-task:' || id = ANY($1::text[])) ORDER BY created_at, id", [
+            ids,
+        ]);
+        return result.rows.map(mapStoredTaskRecord);
+    }
+    return (await readFileTasks()).filter((task) => task.expiresAt > Date.now() && (ids.includes(String(task.payload.generationLogId || "")) || ids.includes(`${task.type}-task:${task.id}`)));
 }
 
 export async function getStoredGenerationTaskByRequest<T>(type: GenerationTaskType, userId: string, clientRequestId: string, attemptNo?: number): Promise<T | null> {
@@ -547,7 +561,7 @@ export async function transitionStoredGenerationTask<T extends { id: string; use
         await ensurePostgresSchema();
         const result = await postgresQuery<{ payload: T }>(
             `UPDATE generation_tasks
-             SET status = $5, payload = payload || $6::jsonb, updated_at = $7, expires_at = $8,
+             SET status = $5, payload = (payload - $20::text[]) || $6::jsonb, updated_at = $7, expires_at = $8,
                  execution_phase = CASE WHEN $9::boolean THEN COALESCE($10, execution_phase) ELSE execution_phase END,
                  upstream_task_id = CASE WHEN $9::boolean THEN COALESCE($11, upstream_task_id) ELSE upstream_task_id END,
                  channel_id = CASE WHEN $9::boolean THEN COALESCE($12, channel_id) ELSE channel_id END,
@@ -582,6 +596,7 @@ export async function transitionStoredGenerationTask<T extends { id: string; use
                 optionalDate(execution?.lastPollAt),
                 execution?.lastUpstreamStatus || null,
                 execution?.resultPayload ? JSON.stringify(execution.resultPayload) : null,
+                Object.keys(nextPatch).filter((key) => nextPatch[key as keyof typeof nextPatch] === undefined),
             ],
         );
         return result.rows[0]?.payload || null;
@@ -932,8 +947,12 @@ function mutateFileTasks(mutator: (tasks: StoredGenerationTaskRecord[]) => Store
 export function withGenerationTaskFileMutation<T>(mutator: (tasks: StoredGenerationTaskRecord[]) => Promise<{ tasks: StoredGenerationTaskRecord[]; result: T }>) {
     const run = fileMutationQueue.then(async () => {
         return withJsonDataFileLock(TASK_FILE, async () => {
-            const mutation = await mutator(await readFileTasks());
+            const previous = await readFileTasks();
+            const mutation = await mutator(previous);
             await writeJsonDataFile(TASK_FILE, mutation.tasks);
+            const byId = new Map(previous.map((task) => [task.id, task]));
+            for (const task of mutation.tasks)
+                if (task !== byId.get(task.id)) notifyGenerationTaskChange({ id: task.id, type: task.type, runId: task.runId, logId: typeof task.payload.generationLogId === "string" ? task.payload.generationLogId : undefined });
             return mutation.result;
         });
     });
@@ -942,6 +961,17 @@ export function withGenerationTaskFileMutation<T>(mutator: (tasks: StoredGenerat
         () => undefined,
     );
     return run;
+}
+
+export async function getStoredGenerationTaskRecordsByIds(ids: string[]) {
+    const keys = [...new Set(ids.filter(Boolean))];
+    if (!keys.length) return [];
+    if (getDatabaseProvider() === "postgres") {
+        await ensurePostgresSchema();
+        const result = await postgresQuery<Record<string, unknown>>("SELECT * FROM generation_tasks WHERE id = ANY($1::text[]) AND expires_at > now()", [keys]);
+        return result.rows.map(mapStoredTaskRecord);
+    }
+    return (await readFileTasks()).filter((task) => keys.includes(task.id) && task.expiresAt > Date.now());
 }
 
 function normalizeGenerationTaskContext(context: GenerationTaskContext): GenerationTaskContext {

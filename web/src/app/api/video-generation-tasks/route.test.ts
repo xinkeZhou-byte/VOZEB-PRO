@@ -32,7 +32,7 @@ vi.mock("@/lib/auth/store", () => {
     class AuthInputError extends Error {
         status = 400;
     }
-    return { AuthInputError, getAuthSettings: mocks.getAuthSettings, isAuthInputError: (error: unknown) => error instanceof AuthInputError, refundUserPoints: mocks.refundUserPoints };
+    return { AuthInputError, getAuthSettings: mocks.getAuthSettings, getFreshAuthSettings: mocks.getAuthSettings, isAuthInputError: (error: unknown) => error instanceof AuthInputError, refundUserPoints: mocks.refundUserPoints };
 });
 vi.mock("@/lib/server/internal-origin", () => ({ fetchInternalApi: mocks.fetchInternalApi, resolveInternalOrigin: vi.fn(() => "http://localhost") }));
 vi.mock("@/lib/server/generation-task-store", () => ({

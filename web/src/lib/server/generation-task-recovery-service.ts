@@ -419,6 +419,7 @@ async function processImageLease(lease: GenerationTaskLease, workerId: string, o
         await releaseGenerationTaskLease("image", lease.id, workerId, { executionPhase: "completed", nextPollAt: undefined });
         return "completed";
     }
+    if (task.resultCheckpoint) return persistImageLease(task, { ...lease, resultPayload: { ...lease.resultPayload, url: "checkpoint://image-task-result" } }, workerId, origin, cookie, userRequested);
     if (!task.upstream?.id && lease.upstreamTaskId) {
         const providerBase = task.config.baseUrl.startsWith("/") ? new URL(task.config.baseUrl, origin).toString() : task.config.baseUrl;
         const restored = await updateImageTask(task.id, {

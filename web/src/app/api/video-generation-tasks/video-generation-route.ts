@@ -1,7 +1,8 @@
 import { after, NextResponse } from "next/server";
 import { readJsonBody } from "@/lib/auth/request";
 import { getCurrentUser } from "@/lib/auth/session";
-import { getAuthSettings, isAuthInputError, refundUserPoints } from "@/lib/auth/store";
+import { getAuthSettings, getFreshAuthSettings, isAuthInputError, refundUserPoints } from "@/lib/auth/store";
+import { generationRouteIdentity } from "@/lib/server/generation-route-freshness";
 import { generationModelId, toSystemGenerationChannel } from "@/lib/server/generation-channel";
 import { finishGenerationAttempt, startGenerationAttempt, type GenerationAttempt } from "@/lib/server/generation-attempt";
 import { fetchInternalApi, resolveInternalOrigin } from "@/lib/server/internal-origin";
@@ -62,7 +63,7 @@ export async function POST(request: Request) {
     if (headerRequestId) body.context = { ...(body.context || {}), clientRequestId: headerRequestId, ...(headerAttemptNo ? { attemptNo: headerAttemptNo } : {}) };
     const concurrencyRequestId = clean(body.context?.clientRequestId) || `video-request:${user.id}:${crypto.randomUUID()}`;
     body.context = { ...(body.context || {}), clientRequestId: concurrencyRequestId };
-    const settings = await getAuthSettings();
+    const settings = await getFreshAuthSettings();
     const response = await withGenerationConcurrencyLimit(
         user.id,
         "video",
@@ -94,8 +95,14 @@ export async function POST(request: Request) {
             let capabilityError: unknown;
             let attempts: GenerationAttempt[] = [];
             let localTask: VideoTask | undefined;
-            for (let index = 0; index < channels.length; index += 1) {
-                const channel = channels[index];
+            const triedRoutes = new Set<string>();
+            while (true) {
+                const latestSettings = await getFreshAuthSettings();
+                const channel = resolveLogicalModelCandidates(latestSettings, "video", requestedModel)
+                    .map(toSystemGenerationChannel)
+                    .find((candidate) => !triedRoutes.has(generationRouteIdentity(candidate)));
+                if (!channel) break;
+                triedRoutes.add(generationRouteIdentity(channel));
                 const geminiVideo = isGeminiVideoChannel(channel);
                 const parameters = {
                     ...requestedParameters,
@@ -139,7 +146,7 @@ export async function POST(request: Request) {
                     capabilityError = error;
                     continue;
                 }
-                const started = startGenerationAttempt(attempts, { channelId: channel.channelId, model: generationModelId(channel), capability: "video" });
+                const started = startGenerationAttempt(attempts, { channelId: channel.channelId, model: generationModelId(channel), capability: "video", channelSnapshot: channel.channelSnapshot });
                 attempts = started.attempts;
                 const pendingUpstream = {
                     id: "",
@@ -202,7 +209,7 @@ export async function POST(request: Request) {
                     if (error instanceof SafeCandidateFailure) {
                         attempts = finishGenerationAttempt(attempts, started.attempt.attemptNo, { status: "failed", error: toSafeGenerationErrorMessage(error, "视频任务创建失败") });
                         await updateVideoTask(localTask.id, { attempts });
-                        if (index < channels.length - 1) continue;
+                        continue;
                     } else if (error instanceof VideoSubmissionUncertainError && error.billing) {
                         const upstream = { ...localTask.upstream, ...error.billing };
                         await updateVideoTask(localTask.id, { upstream, attempts });

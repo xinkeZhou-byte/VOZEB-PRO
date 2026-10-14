@@ -13,6 +13,7 @@ import {
 import { getTextPlanningRuntime } from "@/lib/server/text-planning-runtime";
 import { resolveGenerationReviewReason } from "@/lib/server/generation-task-review-reason";
 import { getDatabaseProvider } from "@/lib/server/database";
+import { generationTaskCallAudits, generationAttempts as normalizeAttempts } from "@/lib/server/generation-call-audit-service";
 
 export async function listAdminGenerationOperations(options: GenerationTaskRecordListOptions): Promise<AdminGenerationOperationsPayload> {
     const settingsPromise = getAuthSettings();
@@ -75,7 +76,7 @@ function taskSummary(record: StoredGenerationTaskRecord, user?: { accountId: str
         parentTaskId: record.parentTaskId,
         attemptNo: record.attemptNo,
         model,
-        channelId: firstText(plannerAudit?.channelId, payload.channelId, config.channelId, upstream.channelId),
+        channelId: firstText(plannerAudit?.channelId, record.channelId, payload.channelId, config.channelId, upstream.channelId),
         provider: record.provider,
         queryPath: record.queryPath,
         executionPhase: record.executionPhase,
@@ -87,7 +88,8 @@ function taskSummary(record: StoredGenerationTaskRecord, user?: { accountId: str
         leaseExpired: isGenerationLeaseExpired(record),
         upstreamTaskId: record.upstreamTaskId || firstText(upstream.id) || undefined,
         lastUpstreamStatus: record.lastUpstreamStatus,
-        attempts: generationAttempts(payload.attempts),
+        attempts: normalizeAttempts(payload.attempts),
+        calls: [...generationTaskCallAudits(record), ...childRecords.flatMap(generationTaskCallAudits)],
         prompt: firstText(payload.prompt, config.prompt, tasks.find((task) => text(task.prompt))?.prompt).slice(0, 500),
         error: firstText(agentFailure?.message, payload.error, tasks.find((task) => text(task.error))?.error, resolveGenerationReviewReason(record)).slice(0, 1000) || undefined,
         durationMs: Math.max(0, record.updatedAt - record.createdAt),
@@ -100,7 +102,9 @@ function taskSummary(record: StoredGenerationTaskRecord, user?: { accountId: str
         updatedAt: record.updatedAt,
         canCancel: record.status === "pending" || record.status === "running" || record.status === "paused",
         retryTaskId: record.type === "agent" ? text(failedTask?.id) || undefined : undefined,
-        canReview: record.executionPhase === "needs_review" && (record.type === "text" || record.type === "image" || record.type === "video" || record.type === "audio"),
+        canReview:
+            (record.executionPhase === "needs_review" && (record.type === "text" || record.type === "image" || record.type === "video" || record.type === "audio")) ||
+            (record.type === "image" && record.status === "error" && !object(payload.result).dataUrl),
     };
 }
 
@@ -236,6 +240,8 @@ function agentPlannerAudit(value: unknown): AdminGenerationTask["plannerAudit"] 
         mode,
         ...(text(source.logicalModelId) ? { logicalModelId: text(source.logicalModelId) } : {}),
         ...(text(source.channelId) ? { channelId: text(source.channelId) } : {}),
+        ...(text(source.channelName) ? { channelName: text(source.channelName) } : {}),
+        ...(Number(source.capturedAt) > 0 ? { capturedAt: Number(source.capturedAt) } : {}),
         ...(text(source.upstreamModel) ? { upstreamModel: text(source.upstreamModel) } : {}),
         ...(protocol ? { protocol } : {}),
         ...(Number.isFinite(Number(source.elapsedMs)) && Number(source.elapsedMs) >= 0 ? { elapsedMs: Number(source.elapsedMs) } : {}),

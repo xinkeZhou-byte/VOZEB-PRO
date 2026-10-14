@@ -97,6 +97,12 @@ VOZEB PRO 的 PostgreSQL 真实表名统一使用项目名前缀 `vozeb_pro_`。
 
 生成恢复通过 `worker_id + lease_until` 原子领取到期任务；页面唤醒和常驻 Worker 复用同一恢复服务。上游创建成功后先保存任务 ID，再进入查询阶段；查询到结果先写 `result_ready`，下一批只完成媒体保存。`submitting` 结果不确定且无法对账时进入 `needs_review`，只有管理员明确提供上游任务 ID、结果或确认失败后才能继续。Webhook 事件先按渠道与事件 ID 幂等登记，再匹配已有媒体任务并清除租约；未匹配事件保留为 `unmatched`，不得创建新任务。
 
+图片 `generation_tasks.payload.resultCheckpoint` 保存当次尝试、来源、供应商请求 ID 与每份产物的来源 URL/私有媒体键、稳定永久媒体键和已处理结果；Base64 原文写入既有私有临时媒体，不写入任务 JSON。`diagnostics` 保存脱敏阶段、堆栈、时间及相关身份，`recoveryEvents` 保存恢复事件并保留原失败与退款。检查点恢复不要求上游任务 ID，不发起新生成；原成功结果和同批成功文件继续保留。任务 JSON 更新对显式 `undefined` 字段执行删除，避免恢复后旧错误残留。
+
+任务配置与每次 `attempts` 保存调用时 `channelSnapshot`，包含逻辑模型、上游模型、渠道名称/ID 和时间；Agent 规划候选单独记录在 `plannerAudit.attempts`。生成日志 `requestSnapshot.callAudit` 保存管理员审计，公开响应显式排除。任务配置的 `upstreamRouteCiphertext` 使用现有 AES-GCM 保存提交时的原地址、协议与凭据，只有校验用户、渠道、模型、本地任务和原上游 ID 后才能用于查询/取消，不能据此授权新创建；该密文不进入管理员或公共 DTO。
+
+`generation_tasks` 的变更触发事务提交后的 `vozeb_pro_generation_events` 通知，载荷仅含任务/Run/关联日志身份；生成日志详情通过关联任务变更刷新。管理员 SSE 只按当前可见记录订阅，首次与重连通知前端重新读取权限保护的快照，不把私有业务数据放进通知。文件 Provider 使用同进程信号。上述字段与通知沿用既有表，本轮未增加数据表。
+
 Agent Run 的状态与任务数组继续保存在 `generation_tasks.payload`，每个多副本子任务同时保存子任务 ID、完成状态、尝试次数和结果，恢复时复用已完成结果并继续轮询未完成任务；事件独立写入 `creative_run_events`。状态更新、助手消息终态和事件追加在同一 PostgreSQL 事务内完成；暂停、恢复、取消、完成和失败竞争时，旧 Run 快照不能覆盖更新后的状态。文件 Provider 使用串行 mutation queue 保持相同的进程内语义。短剧成本概览按 `user_id + project_id + task_type + status` 在数据库聚合，并使用 `generation_tasks_user_project_idx`，不读取数千条完整任务 JSON 后再汇总。
 
 - `vozeb_pro_audit_logs`：登录、后台操作、CDK 兑换等安全审计记录。

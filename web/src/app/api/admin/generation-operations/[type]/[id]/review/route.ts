@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { readJsonBodyResult } from "@/lib/auth/request";
 import { GenerationTaskReviewError, reviewGenerationTask, type GenerationTaskReviewInput, type ReviewableGenerationTaskType } from "@/lib/server/generation-task-review-service";
 import { resolveInternalOrigin } from "@/lib/server/internal-origin";
+import { auditActorFromRequest, safeRecordAuditLog } from "@/lib/server/audit-log-store";
 
 export async function POST(request: Request, { params }: { params: Promise<{ type: string; id: string }> }) {
     const user = await getCurrentUser(request);
@@ -19,6 +20,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ typ
     try {
         const input = body.action === "resume_upstream" ? { ...body, origin: resolveInternalOrigin(new URL(request.url).origin) } : body;
         const data = await reviewGenerationTask(type, id, input as GenerationTaskReviewInput);
+        await safeRecordAuditLog({
+            action: "generation.review",
+            actor: auditActorFromRequest(request, user),
+            target: { type: "generation_task", id },
+            metadata: { taskType: type, reviewAction: body.action, executionPhase: data.executionPhase, ...(body.action === "provide_result" ? { supplierRequestId: (body as { supplierRequestId?: string }).supplierRequestId } : {}) },
+        });
         return NextResponse.json({ code: 0, data, msg: "任务接管状态已更新" });
     } catch (error) {
         if (error instanceof GenerationTaskReviewError) return NextResponse.json({ code: error.status, data: null, msg: error.message }, { status: error.status });

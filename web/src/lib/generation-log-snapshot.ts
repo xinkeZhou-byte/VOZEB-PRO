@@ -51,6 +51,7 @@ export type GenerationLogRequestSnapshot = {
     parameters: GenerationLogSnapshotParameters;
     references: GenerationLogReferenceSnapshot[];
     slots: GenerationLogSlotSnapshot[];
+    callAudit?: import("@/lib/generation-call-audit").GenerationCallAudit[];
 };
 
 export function generationLogPublicPrompt(log: { prompt?: string; creativeConversationId?: string; requestSnapshot?: Pick<GenerationLogRequestSnapshot, "userPrompt"> }) {

@@ -12,6 +12,7 @@ import { resolveGlobalAiOpcPreset } from "@/lib/globalaiopc-catalog";
 import { toSafeGenerationErrorMessage } from "@/lib/server/generation-errors";
 import { generationModelId, toSystemGenerationChannel } from "@/lib/server/generation-channel";
 import { finishGenerationAttempt, startGenerationAttempt } from "@/lib/server/generation-attempt";
+import { recordImageTaskDiagnostic } from "@/lib/server/generation-diagnostics";
 import { resolveLogicalModelCandidates } from "@/lib/server/logical-model-router";
 import { resolveChannelModelConfig } from "@/lib/channel-protocol-registry";
 import { assertReferenceCapabilities } from "@/lib/server/provider-task-config";
@@ -24,7 +25,7 @@ import { registerGenerationTaskAssetsForUser } from "@/lib/server/creative-runti
 import { createSignedReferenceAssetUrl, signReferenceAssetInputUrl } from "@/lib/server/reference-asset-access";
 import { assertCapabilityConstraints } from "@/lib/server/capability-constraints";
 import { resolveModelPollingAttempts, resolveModelRequestTimeoutMs } from "@/lib/server/model-request-policy";
-import { systemAiBillingHeaders } from "@/lib/server/system-ai-billing";
+import { systemAiBillingHeaders, systemAiTaskHeaders } from "@/lib/server/system-ai-billing";
 import { maintenanceWorkerContextHeaders } from "@/lib/server/maintenance-auth";
 import { fetchSafeOutbound } from "@/lib/server/safe-outbound-fetch";
 import { resolveMediaMimeType } from "@/lib/server/media-content-type";
@@ -237,13 +238,14 @@ export function isInternalSystemProxyBase(value: string) {
     }
 }
 
-export function taskHeaders(config: ImageTaskConfig, cookie: string, pointsIdempotencyKey?: string) {
+export function taskHeaders(config: ImageTaskConfig, cookie: string, pointsIdempotencyKey?: string, localTaskId?: string) {
     const headers = new Headers();
     const internal = config.baseUrl.startsWith("/");
     const workerHeaders = maintenanceWorkerContextHeaders(cookie);
     if (internal && workerHeaders) Object.entries(workerHeaders).forEach(([key, value]) => headers.set(key, value));
     else if (internal && cookie) headers.set("cookie", cookie);
     if (internal) Object.entries(systemAiBillingHeaders(generationModelId(config), pointsIdempotencyKey, config.model)).forEach(([key, value]) => headers.set(key, value));
+    if (internal && localTaskId) Object.entries(systemAiTaskHeaders("image", localTaskId)).forEach(([key, value]) => headers.set(key, value));
     if (pointsIdempotencyKey?.trim()) {
         headers.set("Idempotency-Key", pointsIdempotencyKey.trim());
         headers.set("X-Client-Request-Id", pointsIdempotencyKey.trim());
@@ -275,9 +277,12 @@ export function imageSubmissionResponseError(status: number, message: string) {
 }
 
 export async function parseImageSubmissionJson<T>(task: ImageTask, response: Response): Promise<T> {
+    const supplierRequestId = response.headers.get("x-request-id") || undefined;
+    if (supplierRequestId) await updateImageTask(task.id, { attempts: (task.attempts || []).map((attempt) => (attempt.attemptNo === task.attemptNo ? { ...attempt, supplierRequestId } : attempt)) });
     try {
         return (await response.json()) as T;
-    } catch {
+    } catch (error) {
+        await recordImageTaskDiagnostic(task, "response_parse", error).catch(() => undefined);
         await persistChargedImageResponse(task, response.headers);
         throw new GenerationSubmissionUncertainError("图片接口返回了无效 JSON，创建结果待确认");
     }
@@ -340,13 +345,13 @@ export async function parseImagePayloadOrPoll(config: ImageTaskConfig, payload: 
     return pollOpenAiImageTask(config, taskId, mediaBaseUrl, pollBaseUrl, cookie, explicitPollUrl);
 }
 
-export async function pollOpenAiImageTask(config: ImageTaskConfig, taskId: string, mediaBaseUrl: string, pollBaseUrl: string, cookie: string, explicitPollUrl = "", singleStep = false): Promise<ImageTaskResult> {
+export async function pollOpenAiImageTask(config: ImageTaskConfig, taskId: string, mediaBaseUrl: string, pollBaseUrl: string, cookie: string, explicitPollUrl = "", singleStep = false, localTaskId?: string): Promise<ImageTaskResult> {
     const pollUrls = imageTaskPollUrls(config, pollBaseUrl, taskId, explicitPollUrl);
     if (!pollUrls.length) throw new ImageQueryContractError("OpenAI 图片任务缺少明确的异步查询路径");
     let lastError = "";
     for (let attempt = 0; attempt < (singleStep ? 1 : imageTaskPollAttempts(config)); attempt += 1) {
         for (const pollUrl of pollUrls) {
-            const response = await taskFetch(config, pollUrl, { method: "GET", headers: taskHeaders(config, cookie), cache: "no-store", signal: AbortSignal.timeout(Math.min(imageTaskRequestTimeoutMs(config), 60_000)) });
+            const response = await taskFetch(config, pollUrl, { method: "GET", headers: taskHeaders(config, cookie, undefined, localTaskId), cache: "no-store", signal: AbortSignal.timeout(Math.min(imageTaskRequestTimeoutMs(config), 60_000)) });
             if (!response.ok) {
                 const message = await readFetchError(response, "图片任务查询失败");
                 lastError = message;
@@ -794,8 +799,9 @@ export function readBilling(headers: Headers) {
 
 export async function parseChargedImageResponse(task: ImageTask, response: Response, parse: () => Promise<ImageTaskResult>) {
     try {
-        return { ...(await parse()), ...readBilling(response.headers) };
+        return { ...(await parse()), ...readBilling(response.headers), supplierRequestId: response.headers.get("x-request-id") || undefined };
     } catch (error) {
+        await recordImageTaskDiagnostic(task, "response_parse", error).catch(() => undefined);
         if (error instanceof GenerationSubmissionUncertainError) await persistChargedImageResponse(task, response.headers);
         else await refundChargedImageResponse(task, response.headers);
         throw error;

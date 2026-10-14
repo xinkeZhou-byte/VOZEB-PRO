@@ -68,8 +68,25 @@ export function loadPublicSession({ force = false }: { force?: boolean } = {}) {
     return request;
 }
 
-export function notifyPublicSettingsChanged() {
+export const SETTINGS_BROADCAST_CHANNEL = "vozeb-pro-settings";
+let settingsBroadcast: BroadcastChannel | undefined;
+
+export function subscribePublicSettingsBroadcast() {
+    if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") return () => {};
+    const channel = new BroadcastChannel(SETTINGS_BROADCAST_CHANNEL);
+    settingsBroadcast = channel;
+    channel.onmessage = (event) => {
+        if (event.data === "saved") notifyPublicSettingsChanged(false);
+    };
+    return () => {
+        if (settingsBroadcast === channel) settingsBroadcast = undefined;
+        channel.close();
+    };
+}
+
+export function notifyPublicSettingsChanged(broadcast = true) {
     sessionLoadedAt = 0;
+    if (broadcast) settingsBroadcast?.postMessage("saved");
     if (typeof window !== "undefined") window.dispatchEvent(new Event(PUBLIC_SETTINGS_CHANGED_EVENT));
 }
 

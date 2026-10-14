@@ -1,4 +1,18 @@
 export const POSTGRESQL_TRIGGER_SCHEMA_SQL = `
+CREATE OR REPLACE FUNCTION vozeb_pro_notify_generation_task()
+RETURNS trigger LANGUAGE plpgsql AS $generation_notify$
+BEGIN
+    PERFORM pg_notify('vozeb_pro_generation_events', json_build_object(
+        'id', NEW.id, 'type', NEW.task_type, 'runId', NEW.run_id,
+        'logId', NEW.payload->>'generationLogId'
+    )::text);
+    RETURN NEW;
+END;
+$generation_notify$;
+DROP TRIGGER IF EXISTS generation_task_changed ON generation_tasks;
+CREATE TRIGGER generation_task_changed AFTER INSERT OR UPDATE OF status, payload, channel_id, execution_phase, last_upstream_status, result_payload ON generation_tasks
+FOR EACH ROW EXECUTE FUNCTION vozeb_pro_notify_generation_task();
+
 DROP TRIGGER IF EXISTS entitlement_plans_set_updated_at ON entitlement_plans;
 CREATE TRIGGER entitlement_plans_set_updated_at BEFORE UPDATE ON entitlement_plans FOR EACH ROW EXECUTE FUNCTION vozeb_pro_set_updated_at();
 

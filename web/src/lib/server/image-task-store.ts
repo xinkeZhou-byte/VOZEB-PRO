@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 
 import type { LogicalModelCapabilityProfile, SystemChannelAdvancedConfig } from "@/lib/auth/store";
 import type { GenerationAttempt } from "@/lib/server/generation-attempt";
+import type { GenerationChannelSnapshot, GenerationDiagnostic, GenerationRecoveryEvent } from "@/lib/generation-call-audit";
 import type { GenerationLogSource } from "@/lib/server/generation-log-store";
 import { countActiveStoredGenerationTasks, createStoredGenerationTask, getStoredGenerationTask, mutateStoredGenerationTask, touchStoredGenerationTask, transitionStoredGenerationTask, type GenerationTaskContext } from "@/lib/server/generation-task-store";
 import { GENERATION_TASK_RETENTION_MS } from "@/lib/server/generation-task-retention";
@@ -17,6 +18,8 @@ export type ImageTaskConfig = {
     model: string;
     channelId?: string;
     logicalModel?: string;
+    channelSnapshot?: GenerationChannelSnapshot;
+    upstreamRouteCiphertext?: string;
     capabilityProfile?: LogicalModelCapabilityProfile;
     quality?: string;
     size?: string;
@@ -46,6 +49,22 @@ export type StoredImageTaskMediaResult = {
     mimeType?: string;
 };
 
+export type ImageResultCheckpoint = {
+    attemptNo: number;
+    capturedAt: number;
+    supplierRequestId?: string;
+    source: "upstream" | "admin";
+    finalizedAt?: number;
+    outputs: Array<{
+        ordinal: number;
+        sourceUrl?: string;
+        remoteUrl?: string;
+        privateMediaKey?: string;
+        preparedStorageKey: string;
+        prepared?: StoredImageTaskMediaResult;
+    }>;
+};
+
 export type ImageTask = GenerationTaskContext & {
     id: string;
     userId: string;
@@ -70,6 +89,9 @@ export type ImageTask = GenerationTaskContext & {
     candidateConfigs?: ImageTaskConfig[];
     attempts?: GenerationAttempt[];
     attemptNo?: number;
+    resultCheckpoint?: ImageResultCheckpoint;
+    diagnostics?: GenerationDiagnostic[];
+    recoveryEvents?: GenerationRecoveryEvent[];
 };
 
 const TASK_STALE_MS = 3 * 60 * 1000;
@@ -96,7 +118,7 @@ export function countActiveImageTasksForUser(userId: string) {
 export function transitionImageTask(
     task: ImageTask,
     allowedStatuses: ImageTaskStatus[],
-    patch: Partial<Pick<ImageTask, "result" | "error" | "pointsRemaining" | "retryable" | "config" | "billing">> & { status: ImageTaskStatus },
+    patch: Partial<Pick<ImageTask, "result" | "error" | "pointsRemaining" | "retryable" | "config" | "billing" | "attempts" | "resultCheckpoint" | "recoveryEvents">> & { status: ImageTaskStatus },
     executionPatch?: import("@/lib/server/generation-task-scheduler").GenerationTaskSchedulePatch,
 ) {
     return transitionStoredGenerationTask<ImageTask>("image", task.id, task.userId, allowedStatuses, patch, GENERATION_TASK_RETENTION_MS, executionPatch);
@@ -106,6 +128,10 @@ export function touchImageTask(id: string) {
     return touchStoredGenerationTask("image", id, Date.now(), GENERATION_TASK_RETENTION_MS);
 }
 
-export async function updateImageTask(id: string, patch: Partial<Pick<ImageTask, "config" | "candidateConfigs" | "attempts" | "attemptNo" | "upstream" | "billing" | "result" | "retryable">>) {
+export async function updateImageTask(id: string, patch: Partial<Pick<ImageTask, "config" | "candidateConfigs" | "attempts" | "attemptNo" | "upstream" | "billing" | "result" | "retryable" | "resultCheckpoint" | "diagnostics" | "recoveryEvents">>) {
     return mutateStoredGenerationTask<ImageTask>("image", id, GENERATION_TASK_RETENTION_MS, (task) => ({ ...task, ...patch }));
+}
+
+export function mutateImageTask(id: string, mutation: (task: ImageTask) => ImageTask | null) {
+    return mutateStoredGenerationTask<ImageTask>("image", id, GENERATION_TASK_RETENTION_MS, mutation);
 }

@@ -1,7 +1,8 @@
 import { markAudioTaskFailed } from "@/lib/server/audio-task-runtime";
 import { getAudioTask, updateAudioTask } from "@/lib/server/audio-task-store";
 import { markImageTaskFailed } from "@/lib/server/image-task-runtime";
-import { getImageTask, updateImageTask } from "@/lib/server/image-task-store";
+import { getImageTask, updateImageTask, transitionImageTask } from "@/lib/server/image-task-store";
+import { captureImageResultCheckpoint, IMAGE_CHECKPOINT_RESULT_URL } from "@/lib/server/image-result-checkpoint";
 import { getStoredGenerationTaskRecord, type GenerationTaskType } from "@/lib/server/generation-task-store";
 import { scheduleGenerationTask } from "@/lib/server/generation-task-scheduler";
 import { markTextTaskFailed } from "@/lib/server/text-task-runtime";
@@ -10,12 +11,17 @@ import { failVideoTaskFromWorker } from "@/lib/server/video-task-runtime";
 import { getVideoTask, updateVideoTask } from "@/lib/server/video-task-store";
 
 export type ReviewableGenerationTaskType = Extract<GenerationTaskType, "text" | "image" | "video" | "audio">;
-export type GenerationTaskReviewInput = { action: "resume_upstream"; upstreamTaskId: string; origin: string } | { action: "provide_result"; result: string } | { action: "confirm_failed"; reason?: string };
+export type GenerationTaskReviewInput = { action: "resume_upstream"; upstreamTaskId: string; origin: string } | { action: "provide_result"; result: string; supplierRequestId?: string } | { action: "confirm_failed"; reason?: string };
 
 export async function reviewGenerationTask(type: ReviewableGenerationTaskType, id: string, input: GenerationTaskReviewInput) {
     const record = await getStoredGenerationTaskRecord(type, id);
     if (!record) throw new GenerationTaskReviewError(404, "生成任务不存在或已过期");
-    if (record.executionPhase !== "needs_review") throw new GenerationTaskReviewError(409, "当前任务不需要人工确认");
+    if (record.status === "cancelled") throw new GenerationTaskReviewError(409, "已取消的任务不能恢复");
+    if (type === "image" && input.action === "provide_result" && record.status === "success") return { action: input.action, executionPhase: "completed" as const, existingResult: true };
+    if (type === "image" && input.action === "provide_result" && record.payload?.resultCheckpoint && ["result_ready", "persisting"].includes(record.executionPhase || ""))
+        return { action: input.action, executionPhase: record.executionPhase, existingResult: true };
+    const failedImage = type === "image" && input.action === "provide_result" && record.status === "error";
+    if (record.executionPhase !== "needs_review" && !failedImage) throw new GenerationTaskReviewError(409, "当前任务不需要人工确认");
 
     if (input.action === "resume_upstream") {
         const upstreamTaskId = clean(input.upstreamTaskId, 500);
@@ -27,7 +33,7 @@ export async function reviewGenerationTask(type: ReviewableGenerationTaskType, i
     }
 
     if (input.action === "provide_result") {
-        const result = clean(input.result, 20_000);
+        const result = type === "image" ? (typeof input.result === "string" ? input.result.trim() : "") : clean(input.result, 20_000);
         if (!result) throw new GenerationTaskReviewError(400, type === "text" ? "请输入文本结果" : "请输入结果地址");
         if (type === "text") {
             const task = await requireTextTask(id);
@@ -38,6 +44,22 @@ export async function reviewGenerationTask(type: ReviewableGenerationTaskType, i
             return { action: input.action, executionPhase: "completed" as const };
         }
         if (!isResultUrl(result)) throw new GenerationTaskReviewError(400, "结果地址必须是 http(s)、data: 或站内媒体路径");
+        if (type === "image") {
+            const task = await getImageTask(id);
+            if (!task) throw new GenerationTaskReviewError(404, "图片任务不存在或已过期");
+            if (task.status === "cancelled") throw new GenerationTaskReviewError(409, "已取消的任务不能恢复");
+            if (task.status === "success") return { action: input.action, executionPhase: "completed" as const, existingResult: true };
+            if (!task.resultCheckpoint && (task.result?.results?.length || task.result?.serverUrl)) throw new GenerationTaskReviewError(409, "任务已有保存结果，请继续原结果恢复");
+            if (!task.resultCheckpoint) await captureImageResultCheckpoint(task, { dataUrl: result }, "admin", clean(input.supplierRequestId, 500) || undefined);
+            const rearmed = await transitionImageTask(
+                task,
+                ["pending", "running", "error"],
+                { status: "running", retryable: false },
+                { executionPhase: "result_ready", resultPayload: { url: IMAGE_CHECKPOINT_RESULT_URL }, nextPollAt: Date.now(), lastUpstreamStatus: "manual_result" },
+            );
+            if (!rearmed) throw new GenerationTaskReviewError(409, "图片任务状态已变化");
+            return { action: input.action, executionPhase: "result_ready" as const, ...(task.resultCheckpoint ? { existingResult: true } : {}) };
+        }
         await scheduleGenerationTask(type, id, { executionPhase: "result_ready", resultPayload: { url: result }, nextPollAt: Date.now(), lastUpstreamStatus: "manual_result" });
         return { action: input.action, executionPhase: "result_ready" as const };
     }

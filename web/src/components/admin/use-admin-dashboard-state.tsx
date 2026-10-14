@@ -14,6 +14,7 @@ import type { PaymentConfigSummary } from "@/lib/payment-config-types";
 import type { AdminSetupSummary } from "@/lib/server/admin-setup-status";
 import type { GenerationAssetStats, StoredGenerationLog } from "@/lib/server/generation-log-store";
 import type { Prompt } from "@/services/api/prompts";
+import { adminRoutingSettingsSignature } from "@/lib/admin-routing-settings";
 
 export type AdminDashboardProps = {
     initialUsers: PublicUser[];
@@ -69,6 +70,7 @@ export function useAdminDashboardState({ initialUsers, initialUserSummary, initi
     const [userPage, setUserPage] = useState(1);
     const [userTotal, setUserTotal] = useState(0);
     const [settings, setSettingsState] = useState(initialSettings);
+    const [savedRoutingSignature, setSavedRoutingSignature] = useState(() => adminRoutingSettingsSignature(initialSettings));
     const settingsRef = useRef(initialSettings);
     const setSettings = useCallback((update: SetStateAction<AuthSettings>) => {
         const next = typeof update === "function" ? update(settingsRef.current) : update;
@@ -206,6 +208,8 @@ export function useAdminDashboardState({ initialUsers, initialUserSummary, initi
         userTotal,
         setUserTotal,
         settings,
+        savedRoutingSignature,
+        setSavedRoutingSignature,
         setSettings,
         getSettings,
         prompts,

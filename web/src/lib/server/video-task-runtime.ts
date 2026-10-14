@@ -11,7 +11,7 @@ import { VIDEO_PROVIDER_FAILED, VIDEO_PROVIDER_SUCCESS, parseVideoProviderJson, 
 import { claimVideoTaskPoll, completeReconciledVideoTask, failReconciledVideoTask, getVideoTask, updateVideoTask, type VideoTask } from "@/lib/server/video-task-store";
 import { writeVideoGenerationLog } from "@/lib/server/video-task-log";
 import { maintenanceWorkerHeaders } from "@/lib/server/maintenance-auth";
-import { systemAiBillingHeaders } from "@/lib/server/system-ai-billing";
+import { systemAiBillingHeaders, systemAiTaskHeaders } from "@/lib/server/system-ai-billing";
 import { refundVideoTask } from "@/lib/server/video-task-refund";
 import { geminiVideoQueryPath, parseGeminiVideoOperation } from "@/lib/server/gemini-video-provider";
 
@@ -214,6 +214,7 @@ function videoProxyHeaders(task: VideoTask, cookie: string, workerUserId: string
     return {
         ...(workerUserId ? maintenanceWorkerHeaders(workerUserId) : cookie ? { cookie } : {}),
         ...systemAiBillingHeaders(generationModelId(task.config), undefined, task.config.model),
+        ...systemAiTaskHeaders("video", task.id),
     };
 }
 

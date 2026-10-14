@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { deleteGenerationLogs, listGenerationLogs, listUserGenerationLogsForDelete } from "@/lib/server/generation-log-store";
 import { deleteGenerationLogResultsForUser, GenerationLogDraftValidationError, GenerationLogOwnershipError, recordGenerationLogDraft, renameGenerationLogForUser } from "@/lib/server/generation-log-task-service";
 import type { GenerationLogInput } from "@/lib/server/generation-log-types";
+import { publicGenerationLog } from "@/lib/server/public-generation-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +21,8 @@ export async function GET(request: Request) {
     const source = url.searchParams.get("source") || undefined;
     const status = url.searchParams.get("status") || undefined;
     const keyword = url.searchParams.get("keyword") || undefined;
-    return NextResponse.json(await listGenerationLogs({ page, pageSize, kind, source, status, keyword, userId: currentUser.id }));
+    const result = await listGenerationLogs({ page, pageSize, kind, source, status, keyword, userId: currentUser.id });
+    return NextResponse.json({ ...result, items: result.items.map(publicGenerationLog) });
 }
 
 export async function POST(request: Request) {
@@ -32,8 +34,14 @@ export async function POST(request: Request) {
     if (body.assets?.length || body.taskId || body.error || body.completedAt) return NextResponse.json({ error: "浏览器不能提交生成结果、任务终态或结果地址" }, { status: 403 });
     if (body.source !== "image-workbench" && body.source !== "video-workbench") return NextResponse.json({ error: "当前入口不允许浏览器登记生成记录" }, { status: 403 });
     try {
-        const log = await recordGenerationLogDraft({ ...body, userId: currentUser.id, username: currentUser.username, displayName: currentUser.displayName });
-        return NextResponse.json({ log });
+        const log = await recordGenerationLogDraft({
+            ...body,
+            requestSnapshot: body.requestSnapshot ? { version: 1, userPrompt: body.requestSnapshot.userPrompt, parameters: body.requestSnapshot.parameters, references: body.requestSnapshot.references, slots: body.requestSnapshot.slots } : undefined,
+            userId: currentUser.id,
+            username: currentUser.username,
+            displayName: currentUser.displayName,
+        });
+        return NextResponse.json({ log: log ? publicGenerationLog(log) : null });
     } catch (error) {
         if (error instanceof GenerationLogDraftValidationError) return NextResponse.json({ error: error.message }, { status: 400 });
         if (error instanceof GenerationLogOwnershipError) return NextResponse.json({ error: "生成记录不存在" }, { status: 404 });
@@ -50,11 +58,11 @@ export async function PATCH(request: Request) {
     try {
         if (body.action === "rename") {
             const log = await renameGenerationLogForUser(currentUser.id, id, String(body.title || ""));
-            return log ? NextResponse.json({ log }) : NextResponse.json({ error: "生成记录不存在或标题为空" }, { status: 404 });
+            return log ? NextResponse.json({ log: publicGenerationLog(log) }) : NextResponse.json({ error: "生成记录不存在或标题为空" }, { status: 404 });
         }
         if (body.action === "delete-results") {
             const log = await deleteGenerationLogResultsForUser(currentUser.id, id, Array.isArray(body.slotIds) ? body.slotIds : []);
-            return log ? NextResponse.json({ log }) : NextResponse.json({ error: "生成记录或结果不存在" }, { status: 404 });
+            return log ? NextResponse.json({ log: publicGenerationLog(log) }) : NextResponse.json({ error: "生成记录或结果不存在" }, { status: 404 });
         }
     } catch (error) {
         if (error instanceof GenerationLogOwnershipError) return NextResponse.json({ error: "生成记录不存在" }, { status: 404 });

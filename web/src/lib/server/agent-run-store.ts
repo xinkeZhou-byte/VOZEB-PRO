@@ -30,6 +30,7 @@ export type AgentRunChildTask = {
     status: "pending" | "needs_review" | "completed" | "failed" | "cancelled";
     attempt: number;
     result?: unknown;
+    assetIds?: string[];
     error?: string;
 };
 export type AgentRunTask = {
@@ -295,6 +296,20 @@ export async function updateAgentRunById(
         },
         allowedStatuses,
         expectedExecutionId,
+    );
+}
+
+export function reconcileAgentRunResult(id: string, mutate: (current: AgentRun) => AgentRun | null, data: { recoveredTaskId: string }) {
+    return mutateCreativeRun<AgentRun>(
+        id,
+        TTL,
+        (current) => {
+            const next = mutate(current);
+            if (!next) return null;
+            const event = { type: "task.result.recovered", data };
+            return { run: next, event, assistant: assistantUpdate(next, event) };
+        },
+        ["failed", "paused", "completed"],
     );
 }
 

@@ -17,7 +17,7 @@ vi.mock("./store-repository", () => ({
     readPostgresAuthSettings: mocks.readPostgresAuthSettings,
 }));
 
-import { getAuthSettings, getFreshAuthSettings } from "./store-settings-actions";
+import { getAuthSettings, getFreshAuthSettings, setAuthSettings } from "./store-settings-actions";
 
 describe("auth settings cache", () => {
     beforeEach(() => {
@@ -39,5 +39,25 @@ describe("auth settings cache", () => {
         await expect(getFreshAuthSettings()).resolves.toEqual(fresh);
         await expect(getAuthSettings()).resolves.toEqual(fresh);
         expect(mocks.readPostgresAuthSettings).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not let an older in-flight read overwrite a completed save", async () => {
+        const a = structuredClone(DEFAULT_SETTINGS);
+        const b = { ...structuredClone(DEFAULT_SETTINGS), freeDailyPoints: 123.5 };
+        mocks.readPostgresAuthSettings.mockResolvedValueOnce(a);
+        await getFreshAuthSettings();
+        let finishRead!: (settings: typeof a) => void;
+        mocks.readPostgresAuthSettings.mockImplementationOnce(
+            () =>
+                new Promise((done) => {
+                    finishRead = done;
+                }),
+        );
+        const slow = getFreshAuthSettings();
+        mocks.updatePostgresAuthSettings.mockResolvedValueOnce(b);
+        await setAuthSettings({ freeDailyPoints: b.freeDailyPoints });
+        finishRead(a);
+        await expect(slow).resolves.toEqual(b);
+        await expect(getAuthSettings()).resolves.toEqual(b);
     });
 });

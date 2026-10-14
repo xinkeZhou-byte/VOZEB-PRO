@@ -14,8 +14,9 @@ import { writePersistentMediaDataUrl } from "@/lib/server/reference-asset-store"
 import { registerGenerationTaskAssetsForUser } from "@/lib/server/creative-runtime-service";
 import { scheduleGenerationTask } from "@/lib/server/generation-task-scheduler";
 import { GenerationSubmissionSafeFailure, GenerationSubmissionUncertainError, generationSubmissionResponseError, generationSubmissionUncertainError } from "@/lib/server/generation-submission-error";
-import { systemAiBillingHeaders } from "@/lib/server/system-ai-billing";
+import { systemAiBillingHeaders, systemAiTaskHeaders } from "@/lib/server/system-ai-billing";
 import { fetchSafeOutbound } from "@/lib/server/safe-outbound-fetch";
+import { freshGenerationCandidates, generationRouteIdentity } from "@/lib/server/generation-route-freshness";
 
 export type AudioUpstreamStep =
     | { state: "pending"; status: string; upstreamTaskId: string; createPath: string; pointsCost?: number; pointsRecordId?: string }
@@ -30,13 +31,17 @@ export async function createAudioTaskUpstreamStep(task: AudioTask, origin: strin
     if (!running) return { state: "failed", status: "conflict", error: "音频任务状态已变化" };
     if (running.upstream?.id) return queryAudioTaskUpstreamStep(running, origin, cookie, workerUserId);
 
-    const candidates = [running.config, ...(running.candidateConfigs || [])];
+    const triedRoutes = new Set<string>();
     let attempts = running.attempts || [];
     let latestError = "没有可用的音频渠道";
-    for (const [index, config] of candidates.entries()) {
-        const started = startGenerationAttempt(attempts, { channelId: config.channelId, model: generationModelId(config), capability: "audio" });
+    while (true) {
+        const candidates = await freshGenerationCandidates(running.config, "audio", running.candidateConfigs);
+        const config = candidates.find((candidate) => !triedRoutes.has(generationRouteIdentity(candidate)));
+        if (!config) break;
+        triedRoutes.add(generationRouteIdentity(config));
+        const started = startGenerationAttempt(attempts, { channelId: config.channelId, model: generationModelId(config), capability: "audio", channelSnapshot: config.channelSnapshot });
         attempts = started.attempts;
-        const candidate = { ...running, config, candidateConfigs: candidates.slice(index + 1), attempts, attemptNo: started.attempt.attemptNo, upstream: undefined, billing: undefined };
+        const candidate = { ...running, config, candidateConfigs: candidates.filter((item) => !triedRoutes.has(generationRouteIdentity(item))), attempts, attemptNo: started.attempt.attemptNo, upstream: undefined, billing: undefined };
         await updateAudioTask(task.id, { config, candidateConfigs: candidate.candidateConfigs, attempts, attemptNo: candidate.attemptNo, upstream: undefined, billing: undefined });
         await scheduleGenerationTask("audio", task.id, { executionPhase: "submitting", nextPollAt: Date.now(), channelId: config.channelId, provider: config.advancedConfig?.protocol || config.apiFormat, lastUpstreamStatus: "submitting" });
 
@@ -255,6 +260,7 @@ function providerFetch(task: AudioTask, origin: string, cookie: string, workerUs
     if (task.config.baseUrl.startsWith("/") && workerUserId) Object.entries(maintenanceWorkerHeaders(workerUserId)).forEach(([key, value]) => headers.set(key, value));
     else if (cookie) headers.set("cookie", cookie);
     if (task.config.baseUrl.startsWith("/")) Object.entries(systemAiBillingHeaders(generationModelId(task.config), undefined, task.config.model)).forEach(([key, value]) => headers.set(key, value));
+    if (task.config.baseUrl.startsWith("/") && task.upstream?.id) Object.entries(systemAiTaskHeaders("audio", task.id)).forEach(([key, value]) => headers.set(key, value));
     const mediaUrl = task.config.baseUrl.startsWith("/") ? mediaUrlFromProxyPath(path) : "";
     const channelId = task.config.channelId || systemGenerationChannelId(task.config.baseUrl);
     if (mediaUrl && channelId) Object.entries(generationMediaProxyHeaders({ userId: task.userId, taskType: "audio", taskId: task.id, channelId, upstreamModel: task.config.model, url: mediaUrl })).forEach(([key, value]) => headers.set(key, value));

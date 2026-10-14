@@ -225,6 +225,7 @@ function recordStandaloneGenerationTaskLog(input: GenerationTaskLogResultInput) 
         successCount: input.status === "success" ? Math.max(1, input.assets?.length || (input.asset?.url ? 1 : 0)) : 0,
         failCount: input.status === "failed" ? 1 : 0,
         assets: input.assets?.length ? input.assets : input.asset?.url ? [input.asset] : [],
+        ...(input.callAudit?.length ? { requestSnapshot: { version: 1, parameters: {}, references: [], slots: [], callAudit: input.callAudit } } : {}),
         error: input.error,
         createdAt: input.createdAt,
         completedAt: Date.now(),
@@ -294,7 +295,14 @@ function applyGenerationTaskLogResult(current: StoredGenerationLog | undefined, 
         slots = [...slots.filter((slot) => !extraIds.has(slot.id)), ...extraSlots].sort((left, right) => left.index - right.index);
     }
     return finalizeGenerationLog(
-        { ...current, assets, taskId: current.taskId || input.taskId, durationMs: Math.max(current.durationMs, input.durationMs), requestSnapshot: { ...snapshot, slots }, updatedAt: new Date().toISOString() },
+        {
+            ...current,
+            assets,
+            taskId: current.taskId || input.taskId,
+            durationMs: Math.max(current.durationMs, input.durationMs),
+            requestSnapshot: { ...snapshot, slots, callAudit: input.callAudit?.length ? [...(snapshot.callAudit || []).filter((call) => !input.callAudit!.some((next) => next.taskId === call.taskId)), ...input.callAudit] : snapshot.callAudit },
+            updatedAt: new Date().toISOString(),
+        },
         slots,
         input.summary,
     );

@@ -18,7 +18,7 @@ export async function writeImageGenerationLog(
     const results = Array.isArray(result) ? result : [result];
     const targetSize = task.config.outputMode === "layers" ? undefined : resolveResultSize(task.config.quality, task.config.size || "auto");
     const assets = results.flatMap((item) => {
-        const resultUrl = typeof item === "string" ? item : item.remoteUrl || item.dataUrl || "";
+        const resultUrl = typeof item === "string" ? item : item.dataUrl || item.remoteUrl || "";
         return resultUrl
             ? [
                   {
@@ -59,5 +59,6 @@ export async function writeImageGenerationLog(
         canRetry: status === "failed" && task.retryable === true,
         taskKind: task.kind,
         createdAt: task.createdAt,
+        callAudit: [{ taskId: task.id, role: "generation", capability: "image", channelSnapshot: task.config.channelSnapshot, attempts: task.attempts || [], diagnostics: task.diagnostics, recoveryEvents: task.recoveryEvents }],
     });
 }

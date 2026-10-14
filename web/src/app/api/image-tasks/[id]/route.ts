@@ -12,6 +12,7 @@ import { cancellationExecutionPatch, type GenerationCancellationTarget } from "@
 import { refundImageTask } from "@/lib/server/image-task-refund";
 import { getStoredGenerationTaskRecord } from "@/lib/server/generation-task-store";
 import { recoverGenerationTaskFromUpstream } from "@/lib/server/generation-task-user-recovery";
+import { hasImageResultCheckpoint } from "@/lib/server/image-result-checkpoint";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,6 +51,7 @@ export async function GET(request: Request, context: RouteContext) {
                 result: settledTask.result,
                 error: settledTask.error,
                 canRetry: settledTask.retryable === true,
+                canRecoverResult: hasImageResultCheckpoint(settledTask) && !settledTask.resultCheckpoint?.finalizedAt && settledTask.status !== "cancelled",
                 needsReview: executionPhase === "needs_review",
                 reviewReason: executionPhase === "needs_review" ? task.reviewReason : undefined,
                 executionPhase,
@@ -69,16 +71,19 @@ export async function POST(request: Request, context: RouteContext) {
     if (!parsed.ok) return NextResponse.json({ error: parsed.message }, { status: parsed.status });
     if (parsed.data.action !== "recover") return NextResponse.json({ error: "不支持的图片任务操作" }, { status: 400 });
     if (task.status === "success") return NextResponse.json({ task: publicTask(task) }, { headers: pointsResponseHeaders(user) });
-    if (task.status !== "running") return NextResponse.json({ error: "当前图片任务无法继续检查" }, { status: 409 });
+    const resultCheckpoint = hasImageResultCheckpoint(task);
+    if (task.status !== "running" && !(task.status === "error" && resultCheckpoint)) return NextResponse.json({ error: "当前图片任务无法继续检查" }, { status: 409 });
 
     const schedule = await getStoredGenerationTaskRecord("image", task.id);
     const upstreamTaskId = task.upstream?.id || schedule?.upstreamTaskId;
-    if (!upstreamTaskId) return NextResponse.json({ error: "原任务没有保存上游任务 ID，无法安全追回结果" }, { status: 409 });
+    if (!upstreamTaskId && !resultCheckpoint) return NextResponse.json({ error: "原任务没有保存产物或上游任务 ID，无法安全追回结果" }, { status: 409 });
+    if (task.status === "error" && !(await transitionImageTask(task, ["error"], { status: "running", retryable: false }))) return NextResponse.json({ error: "图片任务状态已变化" }, { status: 409 });
 
     const rearmed = await recoverGenerationTaskFromUpstream({
         type: "image",
         id: task.id,
         upstreamTaskId,
+        resultCheckpoint,
         channelId: task.config.channelId,
         provider: task.config.advancedConfig?.protocol || task.config.apiFormat,
         queryPath: task.upstream?.explicitPollUrl || schedule?.queryPath || task.config.advancedConfig?.queryPath,
@@ -102,6 +107,7 @@ export async function POST(request: Request, context: RouteContext) {
                 result: latest.result,
                 error: latest.error,
                 canRetry: latest.retryable === true,
+                canRecoverResult: hasImageResultCheckpoint(latest) && !latest.resultCheckpoint?.finalizedAt && latest.status !== "cancelled",
                 needsReview: latestSchedule?.executionPhase === "needs_review",
                 reviewReason: latestSchedule?.executionPhase === "needs_review" ? latest.reviewReason : undefined,
                 executionPhase: latestSchedule?.executionPhase,

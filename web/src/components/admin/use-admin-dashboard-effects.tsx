@@ -3,7 +3,10 @@
 import { localAgentReadiness } from "@/components/admin/admin-generation-settings";
 import type { AdminSectionKey } from "@/components/admin/admin-sections";
 import type { ReactNode } from "react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { PUBLIC_SETTINGS_CHANGED_EVENT } from "@/stores/use-public-session-store";
+import { readAdminSettings } from "@/services/api/admin-settings";
+import { adminRoutingSettingsSignature } from "@/lib/admin-routing-settings";
 
 import type { AuthSettings, PublicUser, PublicUserSummary } from "@/lib/auth/store";
 import type { AdminSetupSummary } from "@/lib/server/admin-setup-status";
@@ -37,6 +40,36 @@ import type { AdminDashboardSettingsActions } from "./use-admin-dashboard-settin
 import type { AdminDashboardState } from "./use-admin-dashboard-state";
 
 export function useAdminDashboardEffects({ state, data, settingsActions }: { state: AdminDashboardState; data: AdminDashboardDataActions; settingsActions: AdminDashboardSettingsActions }) {
+    const latestState = useRef(state);
+    useEffect(() => {
+        latestState.current = state;
+    }, [state]);
+    useEffect(() => {
+        let version = 0;
+        const refresh = async () => {
+            const before = latestState.current;
+            if (before.settingsLoading) return;
+            const request = ++version;
+            try {
+                const persisted = await readAdminSettings();
+                const current = latestState.current;
+                if (request !== version || current.settingsLoading) return;
+                const pristine = adminRoutingSettingsSignature(current.getSettings()) === current.savedRoutingSignature;
+                if (pristine) current.setSettings((settings) => ({ ...settings, systemChannels: persisted.systemChannels, logicalModels: persisted.logicalModels, defaultModels: persisted.defaultModels }));
+                current.setSavedRoutingSignature(adminRoutingSettingsSignature(persisted));
+            } catch (error) {
+                latestState.current.message.error(error instanceof Error ? error.message : "设置读取失败");
+            }
+        };
+        const changed = () => {
+            void refresh();
+        };
+        window.addEventListener(PUBLIC_SETTINGS_CHANGED_EVENT, changed);
+        return () => {
+            version++;
+            window.removeEventListener(PUBLIC_SETTINGS_CHANGED_EVENT, changed);
+        };
+    }, []);
     const {
         initialSection,
         settings,

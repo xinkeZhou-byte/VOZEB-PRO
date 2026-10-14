@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/auth/session", () => ({ getCurrentUser: mocks.getCurrentUser }));
 vi.mock("@/lib/auth/store", () => ({ getPublicUsersByIds: mocks.getPublicUsersByIds }));
 vi.mock("@/lib/server/generation-log-store", () => ({ deleteGenerationLogs: vi.fn(), listGenerationLogs: mocks.listGenerationLogs }));
+vi.mock("@/lib/server/generation-task-store", () => ({ getStoredGenerationTaskRecordsByIds: vi.fn(async () => []), listStoredGenerationTaskRecordsByRunIds: vi.fn(async () => []), listStoredGenerationTaskRecordsByLogIds: vi.fn(async () => []) }));
 
 import { GET } from "./route";
 

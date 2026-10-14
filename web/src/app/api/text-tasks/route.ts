@@ -2,7 +2,7 @@ import { after, NextResponse } from "next/server";
 
 import { readJsonBody } from "@/lib/auth/request";
 import { getCurrentUser } from "@/lib/auth/session";
-import { getAuthSettings, isAuthInputError } from "@/lib/auth/store";
+import { getAuthSettings, getFreshAuthSettings, isAuthInputError } from "@/lib/auth/store";
 import { generationModelId, toSystemGenerationChannel } from "@/lib/server/generation-channel";
 import { runGenerationTaskRecoveryBatch } from "@/lib/server/generation-task-recovery-service";
 import { scheduleGenerationTask } from "@/lib/server/generation-task-scheduler";
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     if (!currentUser) return NextResponse.json({ error: "请先登录" }, { status: 401 });
     const rate = await checkGenerationRateLimit(currentUser.id, request, "text");
     if (!rate.allowed) return NextResponse.json({ error: "文本生成请求过于频繁，请稍后重试" }, { status: 429, headers: rateLimitHeaders(rate) });
-    const settings = await getAuthSettings();
+    const settings = await getFreshAuthSettings();
     const response = await withGenerationConcurrencyLimit(currentUser.id, "text", 5 * 60 * 1000, settings.generationConcurrency.text, async () => {
         let body: CreateTextTaskBody;
         try {

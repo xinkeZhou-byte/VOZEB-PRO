@@ -9,9 +9,11 @@ import { ChevronDown, Plus, Save, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import type { AdminDashboardController } from "./use-admin-dashboard-controller";
+import { adminRoutingSettingsSignature } from "@/lib/admin-routing-settings";
 
 export function AdminChannelsSection({ controller }: { controller: AdminDashboardController }) {
     const { settings, setSettings, settingsLoading, fetchingModelId, activeSection, saveSettings, deleteChannel, fetchModelsForChannel, fetchAllModels } = controller;
+    const unsaved = adminRoutingSettingsSignature(settings) !== controller.savedRoutingSignature;
     if (activeSection !== "channels") return null;
     return (
         <Panel>
@@ -32,6 +34,9 @@ export function AdminChannelsSection({ controller }: { controller: AdminDashboar
                 }
             />
             <div className="p-3 sm:p-5">
+                <div role="status" aria-live="polite" className="mb-3 text-xs text-[var(--muted-foreground)]">
+                    {settingsLoading ? "正在保存渠道配置…" : unsaved ? "有未保存更改，保存后新调用立即使用新路由" : "配置已保存，新调用使用当前路由"}
+                </div>
                 <AdminChannelWorkspace
                     settings={{ systemChannels: settings.systemChannels, logicalModels: settings.logicalModels, defaultModels: settings.defaultModels }}
                     fetchingModelId={fetchingModelId}

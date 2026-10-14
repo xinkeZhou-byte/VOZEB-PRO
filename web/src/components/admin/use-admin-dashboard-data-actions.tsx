@@ -1,4 +1,5 @@
 "use client";
+import { adminRoutingSettingsSignature } from "@/lib/admin-routing-settings";
 
 import type { AdminSectionKey } from "@/components/admin/admin-sections";
 import { toNumberOrZero } from "@/components/admin/admin-values";
@@ -67,6 +68,7 @@ export function useAdminDashboardDataActions({ state }: { state: AdminDashboardS
         setUserTotal,
         settings,
         setSettings,
+        setSavedRoutingSignature,
         getSettings,
         prompts,
         setPrompts,
@@ -201,6 +203,7 @@ export function useAdminDashboardDataActions({ state }: { state: AdminDashboardS
                 return result as { settings: AuthSettings };
             });
             setSettings((current) => mergeAdminSettingsSaveResponse(current, payload.settings!, snapshot));
+            if (patch.systemChannels || patch.logicalModels || patch.defaultModels) setSavedRoutingSignature(adminRoutingSettingsSignature(payload.settings));
             if (patch.site) applyPublicSiteSettings(payload.settings.site);
             notifyPublicSettingsChanged();
             message.success(successText);

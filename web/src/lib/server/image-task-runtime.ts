@@ -6,15 +6,19 @@ import type { ImageTaskRunResult } from "@/app/api/image-tasks/image-task-types"
 import { stableMediaUrl, writeImageGenerationLog } from "@/app/api/image-tasks/image-task-runner";
 import { getAuthSettings, refundUserPoints } from "@/lib/auth/store";
 import { registerGenerationTaskAssetsForUser } from "@/lib/server/creative-runtime-service";
+import { reconcileRecoveredImageRun } from "@/lib/server/image-task-run-recovery";
 import { finishGenerationAttempt, startGenerationAttempt } from "@/lib/server/generation-attempt";
 import { generationModelId } from "@/lib/server/generation-channel";
 import { refundImageTask } from "@/lib/server/image-task-refund";
-import { deletePreparedImageTaskResults, persistedImageTaskResults, prepareImageTaskResults } from "@/lib/server/image-task-result-service";
+import { ImageOutputValidationError, persistedImageTaskResults, prepareImageTaskResults } from "@/lib/server/image-task-result-service";
+import { captureImageResultCheckpoint, hasImageResultCheckpoint, IMAGE_CHECKPOINT_RESULT_URL } from "@/lib/server/image-result-checkpoint";
+import { imageResultStage } from "@/lib/server/generation-diagnostics";
 import { scheduleGenerationTask } from "@/lib/server/generation-task-scheduler";
 import { GenerationSubmissionSafeFailure, generationSubmissionUncertainError } from "@/lib/server/generation-submission-error";
 import { getImageTask, transitionImageTask, updateImageTask, type ImageTask, type StoredImageTaskMediaResult } from "@/lib/server/image-task-store";
 import { maintenanceWorkerContext } from "@/lib/server/maintenance-auth";
 import { resolveModelRequestTimeoutMs } from "@/lib/server/model-request-policy";
+import { freshGenerationCandidates } from "@/lib/server/generation-route-freshness";
 
 export type ImageUpstreamStep =
     | { state: "pending"; upstream: NonNullable<ImageTask["upstream"]>; status: string }
@@ -28,14 +32,17 @@ export async function createImageTaskUpstreamStep(task: ImageTask, origin: strin
     if (!current || current.status === "cancelled") return { state: "failed", error: "任务已取消", status: "cancelled" };
     const running = current.status === "pending" ? await transitionImageTask(current, ["pending"], { status: "running" }) : current;
     if (!running) return { state: "failed", error: "图片任务状态已变化", status: "conflict" };
+    if (hasImageResultCheckpoint(running)) return readyImageStep(running, IMAGE_CHECKPOINT_RESULT_URL);
     const prepared = persistedImageTaskResults(running);
     if (prepared.length) return readyImageStep(running, prepared[0].serverUrl || prepared[0].dataUrl);
     if (running.upstream?.id) return queryImageTaskUpstreamStep(running, origin, cookie, workerUserId);
 
     const authContext = cookie || maintenanceWorkerContext(workerUserId || task.userId);
-    const config = running.config;
+    const candidates = await freshGenerationCandidates(running.config, "image", running.candidateConfigs);
+    const config = candidates[0];
+    if (!config) return { state: "failed", error: "逻辑模型没有可用的已保存渠道", status: "no_saved_route" };
     let attempts = running.attempts || [];
-    const started = startGenerationAttempt(attempts, { channelId: config.channelId, model: generationModelId(config), capability: "image" });
+    const started = startGenerationAttempt(attempts, { channelId: config.channelId, model: generationModelId(config), capability: "image", channelSnapshot: config.channelSnapshot });
     attempts = started.attempts;
     const candidate = { ...running, config, attempts, attemptNo: started.attempt.attemptNo, upstream: undefined, billing: undefined };
     await updateImageTask(task.id, { config, attempts, attemptNo: candidate.attemptNo, upstream: undefined, billing: undefined });
@@ -66,6 +73,7 @@ export async function createImageTaskUpstreamStep(task: ImageTask, origin: strin
 }
 
 export async function queryImageTaskUpstreamStep(task: ImageTask, origin: string, cookie = "", workerUserId = ""): Promise<ImageUpstreamStep> {
+    if (hasImageResultCheckpoint(task)) return readyImageStep(task, IMAGE_CHECKPOINT_RESULT_URL);
     const prepared = persistedImageTaskResults(task);
     if (prepared.length) return readyImageStep(task, prepared[0].serverUrl || prepared[0].dataUrl);
     const upstream = task.upstream;
@@ -74,7 +82,7 @@ export async function queryImageTaskUpstreamStep(task: ImageTask, origin: string
     try {
         const result = usesDeclarativeImageProtocol(task.config.advancedConfig?.protocol)
             ? await pollCustomImageTask(task, upstream.id, upstream.mediaBaseUrl, upstream.pollBaseUrl, authContext, true)
-            : await pollOpenAiImageTask(task.config, upstream.id, upstream.mediaBaseUrl, upstream.pollBaseUrl, authContext, upstream.explicitPollUrl || "", true);
+            : await pollOpenAiImageTask(task.config, upstream.id, upstream.mediaBaseUrl, upstream.pollBaseUrl, authContext, upstream.explicitPollUrl || "", true, task.id);
         return await handleImageProviderResult(task, { ...result, pointsCost: task.billing?.pointsCost, pointsRecordId: task.billing?.pointsRecordId }, origin, authContext);
     } catch (error) {
         if (error instanceof ImageQueryContractError) return { state: "needs_review", reason: error.message, status: "query_contract_invalid" };
@@ -96,7 +104,8 @@ export async function prepareImageTaskAutomaticRetry(task: ImageTask, error: str
         pointsRecordId: current.billing?.pointsRecordId,
     });
     await refundImageCandidate(current);
-    const nextConfig = current.candidateConfigs?.[0] || current.config;
+    const candidates = await freshGenerationCandidates(current.config, "image", current.candidateConfigs);
+    const nextConfig = candidates.find((candidate) => candidate.channelId !== current.config.channelId) || candidates[0] || current.config;
     return updateImageTask(current.id, {
         config: nextConfig,
         candidateConfigs: [],
@@ -115,7 +124,7 @@ export async function queryCancelledImageTaskUpstreamStep(task: ImageTask, origi
     try {
         const result = usesDeclarativeImageProtocol(task.config.advancedConfig?.protocol)
             ? await pollCustomImageTask(task, upstream.id, upstream.mediaBaseUrl, upstream.pollBaseUrl, authContext, true)
-            : await pollOpenAiImageTask(task.config, upstream.id, upstream.mediaBaseUrl, upstream.pollBaseUrl, authContext, upstream.explicitPollUrl || "", true);
+            : await pollOpenAiImageTask(task.config, upstream.id, upstream.mediaBaseUrl, upstream.pollBaseUrl, authContext, upstream.explicitPollUrl || "", true, task.id);
         return result.pending ? { state: "pending" as const, status: "processing" } : { state: "terminal" as const, status: "completed" };
     } catch (error) {
         if (error instanceof ImageUpstreamTerminalError || error instanceof GenerationSubmissionSafeFailure) return { state: "terminal" as const, status: "failed" };
@@ -125,7 +134,20 @@ export async function queryCancelledImageTaskUpstreamStep(task: ImageTask, origi
 
 export async function persistImageTaskResult(task: ImageTask, origin: string, resultUrl: string, cookie = "", workerUserId = "") {
     const authContext = cookie || maintenanceWorkerContext(workerUserId || task.userId);
-    const current = (await getImageTask(task.id)) || task;
+    const current = await getImageTask(task.id);
+    if (!current) return null;
+    if (current.status === "cancelled") return current;
+    if (current.resultCheckpoint?.finalizedAt && current.status === "success") return current;
+    if (current.resultCheckpoint) {
+        let results: StoredImageTaskMediaResult[];
+        try {
+            results = await prepareImageTaskResults(current, { dataUrl: "" }, origin, authContext);
+        } catch (error) {
+            if (error instanceof ImageOutputValidationError) return markImageTaskFailed(current, error.message);
+            throw error;
+        }
+        return completeImageResult((await getImageTask(task.id)) || current, results);
+    }
     let results = persistedImageTaskResults(current);
     if (results.length) return completeImageResult(current, results);
 
@@ -135,25 +157,22 @@ export async function persistImageTaskResult(task: ImageTask, origin: string, re
     const legacyResults = current.result?.results?.length ? current.result.results : [{ dataUrl: inlineDataUrl, remoteUrl }];
     const normalizedResults = legacyResults.map((item, index) => (index === 0 ? { ...item, dataUrl: inlineDataUrl || item.dataUrl, remoteUrl: remoteUrl || item.remoteUrl } : item));
     try {
-        results = await prepareImageTaskResults(current, { ...normalizedResults[0], results: normalizedResults }, origin, authContext);
+        results = await imageResultStage(current, "image_process", () => prepareImageTaskResults(current, { ...normalizedResults[0], results: normalizedResults }, origin, authContext));
     } catch (error) {
-        return markImageTaskFailed(current, error instanceof Error ? error.message : "上游返回的图片文件无效或保存失败");
-    }
-    try {
-        await updateImageTask(current.id, { result: { ...results[0], results } });
-    } catch (error) {
-        await deletePreparedImageTaskResults(results);
+        if (error instanceof ImageOutputValidationError) return markImageTaskFailed(current, error.message);
         throw error;
     }
+    await imageResultStage(current, "task_update", () => updateImageTask(current.id, { result: { ...results[0], results } }));
     return completeImageResult(current, results);
 }
 
-export async function markImageTaskFailed(task: ImageTask, error: string) {
+export async function markImageTaskFailed(task: ImageTask, error: string, failureOrigin: "upstream" | "local" = "upstream") {
     const current = (await getImageTask(task.id)) || task;
     if (current.status === "success" || current.status === "cancelled") return current;
     const attempts = finishGenerationAttempt(current.attempts || [], current.attemptNo || current.attempts?.at(-1)?.attemptNo || 1, {
         status: "failed",
         error,
+        failureOrigin,
         pointsCost: current.billing?.pointsCost,
         pointsRecordId: current.billing?.pointsRecordId,
     });
@@ -203,26 +222,16 @@ async function handleImageProviderResult(task: ImageTask, result: ImageTaskRunRe
         });
         return { state: "pending", upstream: result.pending, status: "submitted" };
     }
-    let results: StoredImageTaskMediaResult[];
+    const latest = (await getImageTask(task.id)) || task;
+    if (latest.status === "cancelled") return { state: "failed", error: "任务已取消", status: "cancelled" };
+    const attempts = finishGenerationAttempt(latest.attempts || [], latest.attemptNo || 1, { status: "succeeded", supplierRequestId: result.supplierRequestId, pointsCost: billing?.pointsCost, pointsRecordId: billing?.pointsRecordId });
     try {
-        results = await prepareImageTaskResults(task, result, origin, authContext);
+        await updateImageTask(task.id, { attempts });
+        await captureImageResultCheckpoint({ ...latest, attempts }, result, "upstream", result.supplierRequestId);
     } catch (error) {
-        return { state: "failed", error: error instanceof Error ? error.message : "上游返回的图片文件无效或保存失败", status: "failed" };
+        return { state: "needs_review", reason: "上游已返回产物，本地保存尚未完成，请检查状态继续保存", status: "local_result_error" };
     }
-    const first = results[0];
-    if (!first) return { state: "failed", error: "上游返回的图片文件无效或保存失败", status: "failed" };
-    const current = await getImageTask(task.id);
-    if (!current || current.status === "cancelled") {
-        await deletePreparedImageTaskResults(results);
-        return { state: "failed", error: "任务已取消", status: "cancelled" };
-    }
-    try {
-        await updateImageTask(task.id, { result: { ...first, results } });
-    } catch (error) {
-        await deletePreparedImageTaskResults(results);
-        return { state: "failed", error: error instanceof Error ? error.message : "上游返回的图片文件无效或保存失败", status: "failed" };
-    }
-    return readyImageStep(task, first.serverUrl || first.dataUrl);
+    return readyImageStep(task, IMAGE_CHECKPOINT_RESULT_URL);
 }
 
 async function readyImageStep(task: ImageTask, resultUrl: string): Promise<ImageUpstreamStep> {
@@ -272,44 +281,58 @@ async function completeImageResult(task: ImageTask, safeResults: StoredImageTask
         if (current?.status === "cancelled") await refundImageTask(current);
         return current;
     }
-    const completed = await transitionImageTask(current, ["pending", "running"], {
-        status: "success",
-        result: { ...safeResults[0], results: safeResults },
-        pointsRemaining: task.pointsRemaining,
-        retryable: false,
-    });
-    if (!completed) {
-        const latest = await getImageTask(task.id);
-        if (latest?.status === "cancelled") await refundImageTask(latest);
-        return latest;
-    }
-    const logged = await writeImageGenerationLog(completed, "success", safeResults, Date.now() - completed.createdAt).catch((logError) => {
-        console.error("Image generation success log write failed", logError);
-        return undefined;
-    });
+    const completed = { ...current, result: { ...safeResults[0], results: safeResults } };
+    const logged = await imageResultStage(current, "task_update", () => writeImageGenerationLog(completed, "success", safeResults, Date.now() - completed.createdAt));
     const loggedAssets = logged?.assets?.length ? logged.assets : logged?.asset ? [logged.asset] : [];
     const finalResults = loggedAssets.length
         ? loggedAssets.map((asset) => ({ dataUrl: asset.serverUrl || asset.url, remoteUrl: asset.remoteUrl, serverUrl: asset.serverUrl, width: asset.width, height: asset.height, bytes: asset.bytes, mimeType: asset.mimeType }))
         : safeResults;
     const finalResult = finalResults[0];
-    const attempts = finishGenerationAttempt(completed.attempts || [], completed.attemptNo || completed.attempts?.at(-1)?.attemptNo || 1, {
-        status: "succeeded",
-        pointsCost: completed.billing?.pointsCost,
-        pointsRecordId: completed.billing?.pointsRecordId,
-    });
-    const finalized = (await updateImageTask(task.id, { result: { ...finalResult, results: finalResults }, config: { ...completed.config, apiKey: "system" }, candidateConfigs: [], attempts, attemptNo: attempts.at(-1)?.attemptNo })) || completed;
-    const assets = (finalized.result?.results?.length ? finalized.result.results : finalized.result ? [finalized.result] : []).flatMap((item) => {
+    const attempts =
+        completed.resultCheckpoint?.source === "admin"
+            ? completed.attempts || []
+            : finishGenerationAttempt(completed.attempts || [], completed.attemptNo || completed.attempts?.at(-1)?.attemptNo || 1, {
+                  status: "succeeded",
+                  pointsCost: completed.billing?.pointsCost,
+                  pointsRecordId: completed.billing?.pointsRecordId,
+              });
+    const assets = finalResults.flatMap((item) => {
         const url = item.serverUrl || item.remoteUrl || stableMediaUrl(item.dataUrl);
         return url ? [{ type: "image" as const, url, mimeType: item.mimeType, width: item.width, height: item.height, bytes: item.bytes }] : [];
     });
     if (assets.length)
-        await registerGenerationTaskAssetsForUser(finalized.userId, {
-            ...finalized,
-            taskId: finalized.id,
-            title: finalized.title || finalized.prompt.slice(0, 80),
-            assets,
-        }).catch((error) => console.error("Creative image asset registration failed", error));
-    return finalized;
+        await imageResultStage(current, "asset_register", () =>
+            registerGenerationTaskAssetsForUser(completed.userId, {
+                ...completed,
+                taskId: completed.id,
+                title: completed.title || completed.prompt.slice(0, 80),
+                assets,
+            }),
+        );
+    const recoveryEvents = [...(current.recoveryEvents || [])];
+    if (current.resultCheckpoint?.source === "admin" || current.diagnostics?.length) await imageResultStage(current, "task_update", () => reconcileRecoveredImageRun({ ...completed, result: { ...finalResult, results: finalResults } }));
+    if (current.resultCheckpoint && (current.resultCheckpoint.source === "admin" || current.diagnostics?.length))
+        recoveryEvents.push({
+            recoveredAt: Date.now(),
+            attemptNo: current.resultCheckpoint.attemptNo,
+            supplierRequestId: current.resultCheckpoint.supplierRequestId,
+            source: current.resultCheckpoint.source === "admin" ? "admin" : "checkpoint",
+            previousError: current.error || current.diagnostics?.at(-1)?.message,
+        });
+    const finalized = await imageResultStage(current, "task_update", () =>
+        transitionImageTask(current, ["pending", "running"], {
+            status: "success",
+            result: { ...finalResult, results: finalResults },
+            error: undefined,
+            retryable: false,
+            attempts,
+            config: { ...completed.config, apiKey: "system" },
+            ...(current.resultCheckpoint ? { resultCheckpoint: { ...current.resultCheckpoint, finalizedAt: Date.now() } } : {}),
+            recoveryEvents,
+        }),
+    );
+    if (finalized) await updateImageTask(task.id, { candidateConfigs: [] });
+    return finalized || getImageTask(task.id);
 }
 
 function usesDeclarativeImageProtocol(protocol: NonNullable<ImageTask["config"]["advancedConfig"]>["protocol"] | undefined) {

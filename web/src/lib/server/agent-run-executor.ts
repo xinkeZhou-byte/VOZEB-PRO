@@ -1,4 +1,4 @@
-import { getAuthSettings } from "@/lib/auth/store";
+import { getFreshAuthSettings } from "@/lib/auth/store";
 import { nanoid } from "nanoid";
 import { resolveLogicalModelCandidates } from "@/lib/server/logical-model-router";
 import { systemAiIdempotencyKey } from "@/lib/server/system-ai-billing";
@@ -17,6 +17,7 @@ import { buildAgentRunPlannerAudit } from "@/lib/server/agent-run-audit";
 import { agentRequestDigest, buildAgentRequest, serializeAgentRequest } from "@/lib/server/agent-prompt-json";
 import { orderCreativeAssetsByIds } from "@/lib/creative-asset-references";
 import { withDirectAgentExecutionContext } from "./agent-run-direct-context";
+import { startGenerationAttempt, finishGenerationAttempt, type GenerationAttempt } from "./generation-attempt";
 
 const globalAgentExecutors = globalThis as typeof globalThis & { __vozebProAgentRunControllers?: Map<string, AbortController> };
 const controllers = (globalAgentExecutors.__vozebProAgentRunControllers ??= new Map<string, AbortController>());
@@ -29,7 +30,7 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
     abortAgentRun(run.id);
     const controller = new AbortController();
     const executionId = nanoid();
-    let acceptedPlan: { userId: string; model: string; channelId: string; upstreamModel: string; call: AgentFunctionCallResult } | undefined;
+    let acceptedPlan: { userId: string; model: string; channelId: string; channelName: string; capturedAt: number; upstreamModel: string; call: AgentFunctionCallResult } | undefined;
     let planningPersisted = false;
     let failureStage: NonNullable<AgentRun["failureStage"]> = run.tasks.length ? "task_execution" : "planning";
     const candidateFailures: NonNullable<AgentRun["candidateFailures"]> = [];
@@ -49,14 +50,14 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
         if (!claimed) return;
         if (claimed.tasks.length) {
             failureStage = "task_execution";
-            const settings = await getAuthSettings();
+            const settings = await getFreshAuthSettings();
             await executeTasks(run.id, origin, cookie, executionId, settings);
             return;
         }
         const directModelSelection = Boolean(claimed.requestedModelIds?.length);
         const usesMemoryCandidates = !directModelSelection && claimed.surface === "chat" && claimed.referencedAssetIds.length === 0;
         const [settings, loadedExplicitAssets, conversationContext, memoryAssets] = await Promise.all([
-            getAuthSettings(),
+            getFreshAuthSettings(),
             getCreativeAssetsByIds(claimed.referencedAssetIds, claimed.userId),
             getCreativeConversationContext(claimed.conversationId, claimed.userId, claimed.id),
             usesMemoryCandidates ? listRecentCreativeMediaAssets(claimed.conversationId, claimed.userId, 6) : Promise.resolve([]),
@@ -127,7 +128,22 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
             return;
         let plan: Awaited<ReturnType<typeof parseAgentPlanCall>> | undefined;
         let latestPlanningError: unknown;
-        for (const candidate of rankTextPlanningCandidates(candidates.map((candidate) => ({ ...candidate, channelId: candidate.channel.id })))) {
+        let planningAttempts: GenerationAttempt[] = [];
+        const triedPlanningRoutes = new Set<string>();
+        while (true) {
+            const latestSettings = await getFreshAuthSettings();
+            const candidate = rankTextPlanningCandidates(resolveLogicalModelCandidates(latestSettings, "text", model)).find((item) => !triedPlanningRoutes.has(JSON.stringify([item.channelId, item.upstreamModel])));
+            if (!candidate) break;
+            triedPlanningRoutes.add(JSON.stringify([candidate.channelId, candidate.upstreamModel]));
+            const capturedAt = Date.now();
+            const started = startGenerationAttempt(planningAttempts, {
+                model,
+                channelId: candidate.channelId,
+                channelSnapshot: { logicalModelId: model, upstreamModel: candidate.upstreamModel, channelId: candidate.channelId, channelName: candidate.channel.name, capturedAt },
+            });
+            planningAttempts = started.attempts;
+            const persistPlanningAttempts = () => updateAgentRunById(run.id, { plannerAudit: buildAgentRunPlannerAudit({ mode: "model", skills, attempts: planningAttempts }) }, { type: "run.planning.attempt" }, ["running"], executionId);
+            if (!(await persistPlanningAttempts())) return;
             try {
                 const planCall = await requestFunctionCall(
                     origin,
@@ -161,9 +177,15 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
                     allowProjectHandoff: claimed.surface === "chat" && isExplicitProjectHandoffRequest(claimed.prompt),
                     requiredGenerationMode: claimed.generationPreferences?.mode,
                 });
-                if (plan) acceptedPlan = { userId: claimed.userId, model, channelId: candidate.channel.id, upstreamModel: candidate.upstreamModel, call: planCall };
+                if (plan) acceptedPlan = { userId: claimed.userId, model, channelId: candidate.channel.id, channelName: candidate.channel.name, capturedAt, upstreamModel: candidate.upstreamModel, call: planCall };
+                planningAttempts = finishGenerationAttempt(planningAttempts, started.attempt.attemptNo, { status: "succeeded", pointsCost: planCall.pointsCost, pointsRecordId: planCall.pointsRecordId });
                 break;
             } catch (error) {
+                planningAttempts = finishGenerationAttempt(planningAttempts, started.attempt.attemptNo, {
+                    status: error instanceof GenerationSubmissionUncertainError ? "running" : "failed",
+                    error: toSafeGenerationErrorMessage(error, "规划渠道调用失败"),
+                });
+                await persistPlanningAttempts();
                 if (controller.signal.aborted) throw error;
                 if (error instanceof GenerationSubmissionUncertainError) throw error;
                 latestPlanningError = error;
@@ -176,12 +198,15 @@ export async function executeAgentRun(run: AgentRun, origin: string, cookie: str
             mode: "model",
             logicalModelId: model,
             channelId: acceptedPlan?.channelId,
+            channelName: acceptedPlan?.channelName,
+            capturedAt: acceptedPlan?.capturedAt,
             upstreamModel: acceptedPlan?.upstreamModel,
             protocol: acceptedPlan?.call.protocol,
             elapsedMs: acceptedPlan?.call.elapsedMs,
             pointsCost: acceptedPlan?.call.pointsCost,
             pointsRecordId: acceptedPlan?.call.pointsRecordId,
             skills,
+            attempts: planningAttempts,
         });
         if (!(await canContinue(run.id, executionId))) {
             await refundAcceptedPlan();

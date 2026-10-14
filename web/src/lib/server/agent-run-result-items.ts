@@ -6,23 +6,25 @@ export function agentTaskResultItems(value: unknown) {
     if (!root) return [{}];
     const items: Record<string, unknown>[] = [];
 
-    const visit = (record: Record<string, unknown>, depth: number) => {
-        if (items.length >= 10) return;
+    const pending = [root];
+    const visited = new WeakSet<object>();
+    while (pending.length) {
+        const record = pending.pop()!;
+        if (visited.has(record)) continue;
+        visited.add(record);
         const nested = RESULT_LIST_KEYS.map((key) => record[key]).find(Array.isArray);
         const records = Array.isArray(nested) ? nested.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [];
-        if (records.length && depth < 4) {
-            records.forEach((item) => visit(item, depth + 1));
-            return;
+        if (records.length) {
+            for (let index = records.length - 1; index >= 0; index -= 1) pending.push(records[index]);
+            continue;
         }
         const wrapper = RESULT_WRAPPER_KEYS.map((key) => resultRecord(record[key])).find((item): item is Record<string, unknown> => Boolean(item));
-        if (wrapper && depth < 4) {
-            visit(wrapper, depth + 1);
-            return;
+        if (wrapper) {
+            pending.push(wrapper);
+            continue;
         }
         items.push(record);
-    };
-
-    visit(root, 0);
+    }
     return items.length ? items : [root];
 }
 

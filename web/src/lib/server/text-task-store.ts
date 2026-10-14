@@ -5,6 +5,7 @@ import type { AiTextMessage } from "@/types/ai";
 import { createStoredGenerationTask, getStoredGenerationTask, mutateStoredGenerationTask, touchStoredGenerationTask, transitionStoredGenerationTask } from "@/lib/server/generation-task-store";
 import type { GenerationAttempt } from "@/lib/server/generation-attempt";
 import { GENERATION_TASK_RETENTION_MS } from "@/lib/server/generation-task-retention";
+import type { GenerationChannelSnapshot } from "@/lib/generation-call-audit";
 
 type TextTaskStatus = "pending" | "running" | "success" | "error" | "cancelled";
 
@@ -16,6 +17,8 @@ export type TextTaskConfig = {
     model: string;
     channelId?: string;
     logicalModel?: string;
+    channelSnapshot?: GenerationChannelSnapshot;
+    upstreamRouteCiphertext?: string;
     capabilityProfile?: LogicalModelCapabilityProfile;
     advancedConfig?: SystemChannelAdvancedConfig;
     systemPrompt?: string;

@@ -23,7 +23,7 @@ vi.mock("@/lib/server/local-media-registry", () => ({
 vi.mock("@/lib/server/object-storage-service", () => ({ persistExternalMediaIfEnabled: vi.fn(async () => null) }));
 vi.mock("@/lib/server/local-media-storage", () => ({
     cleanupExpiredLocalMediaAssets: mocks.cleanupExpired,
-    createDatedMediaPath: vi.fn(() => "temporary/2026/01/01/images/file.png"),
+    createDatedMediaPath: vi.fn(() => "temporary/2026/01/01/images/20260101-000000-00000000-0000-4000-8000-000000000000.png"),
     REFERENCE_MEDIA_ROOT: "C:\\tmp\\reference-assets",
 }));
 

@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth/store", () => ({
     getAuthSettings: mocks.getAuthSettings,
+    getFreshAuthSettings: mocks.getAuthSettings,
     refundUserPoints: mocks.refundUserPoints,
 }));
 vi.mock("@/lib/server/internal-origin", () => ({ fetchInternalApi: mocks.fetchInternalApi }));
@@ -116,7 +117,7 @@ describe("executeAgentRun backend settings", () => {
         expect(output.ops).not.toContainEqual({ type: "select_nodes", ids: ["output-agent-run-0-0"] });
     });
 
-    it("uses one immutable settings snapshot for a resumed run", async () => {
+    it("refreshes routing before submitting an unsubmitted task in a resumed run", async () => {
         mocks.run = runWithTasks([imageTask("image-one")]);
         mocks.getAuthSettings.mockResolvedValueOnce(settings("old-image", "old-channel")).mockResolvedValue(settings("new-image", "new-channel"));
 
@@ -124,7 +125,7 @@ describe("executeAgentRun backend settings", () => {
 
         const createCall = mocks.fetchInternalApi.mock.calls.find((call) => call[1]?.method === "POST");
         const body = JSON.parse(String(createCall?.[1]?.body)) as { config: { model: string; baseUrl: string; apiKey: string } };
-        expect(body.config).toMatchObject({ model: "old-image", baseUrl: "/api/ai/system/old-channel", apiKey: "" });
+        expect(body.config).toMatchObject({ model: "new-image", baseUrl: "/api/ai/system/new-channel", apiKey: "" });
         expect(mocks.run?.status).toBe("completed");
     });
 
@@ -273,14 +274,14 @@ describe("executeAgentRun backend settings", () => {
         expect(mocks.run?.tasks).toEqual([expect.objectContaining({ status: "completed" }), expect.objectContaining({ status: "completed" })]);
     });
 
-    it("does not change channel settings halfway through a run", async () => {
+    it("honors a saved channel disable before the next unsubmitted task", async () => {
         mocks.run = runWithTasks([imageTask("image-one"), imageTask("image-two")]);
         mocks.getAuthSettings.mockResolvedValueOnce(settings("image-model", "image-channel")).mockResolvedValueOnce(settings("image-model", "image-channel")).mockResolvedValue(disabledSettings("image-model", "image-channel"));
 
         await executeAgentRun(mocks.run, "http://localhost", "session=test");
 
-        expect(mocks.fetchInternalApi.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(2);
-        expect(mocks.run?.tasks[1]).toMatchObject({ status: "completed", attempts: 1 });
+        expect(mocks.fetchInternalApi.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(1);
+        expect(mocks.run?.tasks[1]).toMatchObject({ status: "failed" });
         expect(mocks.run?.status).toBe("completed");
     });
 
@@ -844,7 +845,7 @@ describe("executeAgentRun backend settings", () => {
             runId: "agent-run",
             surface: "chat",
             projectId: undefined,
-            parentTaskId: "agent-run",
+            parentTaskId: "main",
             attemptNo: 1,
         });
         expect(mocks.registerCreativeAssets).toHaveBeenCalledWith([expect.objectContaining({ sourceTaskId: "child-chat", parentAssetId: "asset-source", remoteUrl: "https://cdn.example.com/result.png", messageId: "assistant-message" })]);

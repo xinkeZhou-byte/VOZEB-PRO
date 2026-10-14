@@ -9,13 +9,14 @@ import { finishGenerationAttempt, startGenerationAttempt } from "@/lib/server/ge
 import { getTextTask, transitionTextTask, type TextTask, type TextTaskConfig } from "@/lib/server/text-task-store";
 import { updateTextTask } from "@/lib/server/text-task-store";
 import type { AiTextMessage } from "@/types/ai";
-import { hasSystemAiCharge, readSystemAiBilling, systemAiBillingHeaders } from "@/lib/server/system-ai-billing";
+import { hasSystemAiCharge, readSystemAiBilling, systemAiBillingHeaders, systemAiTaskHeaders } from "@/lib/server/system-ai-billing";
 import { resolveModelRequestTimeoutMs } from "@/lib/server/model-request-policy";
 import { buildProviderRequest, isProviderBusinessError, providerQueryPaths, readProviderError, readProviderString } from "@/lib/server/provider-task-config";
 import { maintenanceWorkerContextHeaders } from "@/lib/server/maintenance-auth";
 import { GenerationSubmissionSafeFailure, GenerationSubmissionUncertainError, generationSubmissionResponseError, generationSubmissionUncertainError } from "@/lib/server/generation-submission-error";
 import { resolveTextProtocol, type ResolvedTextProtocol } from "@/lib/server/text-protocol-resolver";
 import { refundTextTask, textTaskRefundIdempotencyKey } from "@/lib/server/text-task-refund";
+import { freshGenerationCandidates, generationRouteIdentity } from "@/lib/server/generation-route-freshness";
 
 configureServerProxyDispatcher();
 
@@ -65,13 +66,17 @@ export async function runTextTaskStep(task: TextTask, origin: string, cookie: st
     if (!running) return { state: "failed", error: "文本任务状态已变化" };
     if (running.upstream?.id) return queryCustomTextTaskStep(running, origin, cookie);
 
-    const candidates = [running.config, ...(running.candidateConfigs || [])];
+    const triedRoutes = new Set<string>();
     let attempts = running.attempts || [];
     let latestError: unknown;
-    for (const [index, config] of candidates.entries()) {
-        const started = startGenerationAttempt(attempts, { channelId: config.channelId, model: generationModelId(config), capability: "text" });
+    while (true) {
+        const candidates = await freshGenerationCandidates(running.config, "text", running.candidateConfigs);
+        const config = candidates.find((candidate) => !triedRoutes.has(generationRouteIdentity(candidate)));
+        if (!config) break;
+        triedRoutes.add(generationRouteIdentity(config));
+        const started = startGenerationAttempt(attempts, { channelId: config.channelId, model: generationModelId(config), capability: "text", channelSnapshot: config.channelSnapshot });
         attempts = started.attempts;
-        const candidateTask = { ...running, config, candidateConfigs: candidates.slice(index + 1), attemptNo: started.attempt.attemptNo, attempts };
+        const candidateTask = { ...running, config, candidateConfigs: candidates.filter((candidate) => !triedRoutes.has(generationRouteIdentity(candidate))), attemptNo: started.attempt.attemptNo, attempts };
         await updateTextTask(task.id, { config, candidateConfigs: candidateTask.candidateConfigs, attemptNo: candidateTask.attemptNo, attempts });
         await scheduleGenerationTask("text", task.id, {
             executionPhase: "submitting",
@@ -185,7 +190,7 @@ async function queryCustomTextTaskStep(task: TextTask, origin: string, cookie: s
     if (!upstream?.id) return { state: "needs_review", error: "文本任务缺少上游任务 ID" };
     let lastError = "";
     for (const path of providerQueryPaths(config.advancedConfig, upstream.id, [])) {
-        const response = await taskFetch(config, taskUrl(config, path, origin), { headers: taskHeaders(config, cookie), cache: "no-store" });
+        const response = await taskFetch(config, taskUrl(config, path, origin), { headers: taskHeaders(config, cookie, undefined, task.id), cache: "no-store" });
         if (!response.ok) {
             lastError = await readFetchError(response, "自定义文本任务查询失败");
             continue;
@@ -208,7 +213,7 @@ export async function queryCancelledTextTaskUpstreamStep(task: TextTask, origin:
     if (!upstream?.id) return { state: "terminal" as const, status: "missing_upstream_id" };
     let lastError = "";
     for (const path of providerQueryPaths(config.advancedConfig, upstream.id, [])) {
-        const response = await taskFetch(config, taskUrl(config, path, origin), { headers: taskHeaders(config, cookie), cache: "no-store" });
+        const response = await taskFetch(config, taskUrl(config, path, origin), { headers: taskHeaders(config, cookie, undefined, task.id), cache: "no-store" });
         if (!response.ok) {
             lastError = await readFetchError(response, "自定义文本任务查询失败");
             continue;
@@ -507,7 +512,7 @@ function isInternalSystemProxyBase(value: string) {
     }
 }
 
-export function taskHeaders(config: TextTaskConfig, cookie: string, pointsIdempotencyKey?: string) {
+export function taskHeaders(config: TextTaskConfig, cookie: string, pointsIdempotencyKey?: string, localTaskId?: string) {
     const headers = new Headers();
     const internal = config.baseUrl.startsWith("/");
     const workerHeaders = maintenanceWorkerContextHeaders(cookie);
@@ -515,6 +520,7 @@ export function taskHeaders(config: TextTaskConfig, cookie: string, pointsIdempo
     else if (internal && cookie) headers.set("cookie", cookie);
     if (internal) {
         Object.entries(systemAiBillingHeaders(generationModelId(config), pointsIdempotencyKey, config.model)).forEach(([key, value]) => headers.set(key, value));
+        if (localTaskId) Object.entries(systemAiTaskHeaders("text", localTaskId)).forEach(([key, value]) => headers.set(key, value));
     }
     if (!internal && config.apiFormat === "gemini") headers.set("x-goog-api-key", config.apiKey);
     else if (!internal) headers.set("authorization", `Bearer ${config.apiKey}`);

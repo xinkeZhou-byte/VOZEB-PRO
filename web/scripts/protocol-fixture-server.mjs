@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
@@ -41,7 +42,7 @@ export function createProtocolFixtureServer(options = {}) {
     const tasks = new Map();
     const requests = [];
     let taskSequence = 0;
-    const nextTaskId = (kind) => `fixture-${kind}-${++taskSequence}`;
+    const nextTaskId = (kind) => `fixture-${kind}-${options.taskNamespace ? `${options.taskNamespace}-` : ""}${++taskSequence}`;
     const server = createServer(async (request, response) => {
         try {
             const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
@@ -62,16 +63,19 @@ async function handleFixtureRequest({ request, response, url, body, tasks, reque
     if (request.method === "GET" && path === "/health") return sendJson(response, 200, { ok: true });
     if (request.method === "GET" && path === "/__state") {
         return sendJson(response, 200, {
-            requests: requests
-                .filter((item) => !item.path.endsWith("/__state"))
-                .map((item) => ({
-                    method: item.method,
-                    path: item.path,
-                    authorization: item.headers.authorization || "",
-                    contentType: item.contentType,
-                    bodyBytes: item.body.byteLength,
-                    model: requestedModel(item.body, item.contentType),
-                })),
+            requests: await Promise.all(
+                requests
+                    .filter((item) => !item.path.endsWith("/__state"))
+                    .map(async (item) => ({
+                        method: item.method,
+                        path: item.path,
+                        authorization: item.headers.authorization || "",
+                        contentType: item.contentType,
+                        bodyBytes: item.body.byteLength,
+                        model: requestedModel(item.body, item.contentType),
+                        inputReferenceBytes: (await multipartImage(item.body, item.contentType, "input_reference"))?.byteLength || 0,
+                    })),
+            ),
             tasks: Array.from(tasks.entries()).map(([id, task]) => ({ id, ...task })),
         });
     }
@@ -363,6 +367,7 @@ function toolArguments(name, payload) {
                         ratio: "16:9",
                         quality: "720",
                         seconds: 5,
+                        assetIds: plannerReferencedAssetIds(payload),
                         dependencies: [],
                     },
                 ],
@@ -520,6 +525,15 @@ function plannerGenerationMode(payload) {
     }
 }
 
+function plannerReferencedAssetIds(payload) {
+    try {
+        const ids = JSON.parse(plannerRequestText(payload))?.references?.assetIds;
+        return Array.isArray(ids) ? ids : [];
+    } catch {
+        return [];
+    }
+}
+
 function imageRequestDimensions(payload) {
     const match = plannerRequestText(payload).match(/(\d+)x(\d+)/i);
     return { width: Math.max(1, Number(match?.[1]) || 1024), height: Math.max(1, Number(match?.[2]) || 1024) };
@@ -606,10 +620,10 @@ async function layeredFixtureImages(body, contentType, options) {
     return Promise.all([sharp(element, { raw }).png().toBuffer(), sharp(background, { raw }).png().toBuffer()]);
 }
 
-async function multipartImage(body, contentType) {
+async function multipartImage(body, contentType, field = "image") {
     if (!String(contentType).toLowerCase().startsWith("multipart/form-data")) return null;
     const form = await new Response(body, { headers: { "content-type": contentType } }).formData();
-    const file = form.getAll("image").find((value) => value instanceof Blob);
+    const file = form.getAll(field).find((value) => value instanceof Blob);
     return file ? Buffer.from(await file.arrayBuffer()) : null;
 }
 
@@ -690,6 +704,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
     const port = Number(process.env.VOZEB_PRO_PROTOCOL_FIXTURE_PORT) || 4010;
     const host = process.env.VOZEB_PRO_PROTOCOL_FIXTURE_HOST || "127.0.0.1";
     const fixture = createProtocolFixtureServer({
+        taskNamespace: randomUUID(),
         imagePath: process.env.VOZEB_PRO_PROTOCOL_FIXTURE_IMAGE,
         videoPath: process.env.VOZEB_PRO_PROTOCOL_FIXTURE_VIDEO,
         responseDelayMs: process.env.VOZEB_PRO_PROTOCOL_FIXTURE_DELAY_MS,

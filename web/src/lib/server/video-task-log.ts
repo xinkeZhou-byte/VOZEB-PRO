@@ -37,5 +37,6 @@ export function writeVideoGenerationLog(task: VideoTask, status: "success" | "fa
         taskPollPath: task.upstream.pollPath,
         serverTaskId: task.id,
         createdAt: task.createdAt,
+        callAudit: [{ taskId: task.id, role: "generation", capability: "video", channelSnapshot: task.config.channelSnapshot, attempts: task.attempts || [] }],
     });
 }

@@ -1,6 +1,8 @@
 import type { ResolvedLogicalModel } from "./logical-model-router";
 import { resolveGlobalAiOpcPreset } from "@/lib/globalaiopc-catalog";
 import { resolveChannelModelAdvancedConfig, resolveChannelModelConfig } from "@/lib/channel-protocol-registry";
+import type { GenerationChannelSnapshot } from "@/lib/generation-call-audit";
+import { encryptSecretValue } from "./secret-crypto";
 
 type GenerationApiFormat = "openai" | "gemini";
 export type SystemGenerationChannelConfig = {
@@ -11,6 +13,8 @@ export type SystemGenerationChannelConfig = {
     model: string;
     channelId?: string;
     logicalModel?: string;
+    channelSnapshot?: GenerationChannelSnapshot;
+    upstreamRouteCiphertext?: string;
     advancedConfig?: import("@/lib/auth/store").SystemChannelAdvancedConfig;
     capabilityProfile?: ReturnType<typeof import("@/lib/model-routing-config").resolveLogicalModelCapabilityProfile>;
 };
@@ -53,6 +57,8 @@ export function toSystemGenerationChannel(resolved: ResolvedLogicalModel): Syste
         model: resolved.upstreamModel,
         channelId: resolved.channelId,
         logicalModel: resolved.logicalModelId,
+        channelSnapshot: { logicalModelId: resolved.logicalModelId, upstreamModel: resolved.upstreamModel, channelId: resolved.channelId, channelName: resolved.channel.name, capturedAt: Date.now() },
+        upstreamRouteCiphertext: encryptSecretValue(JSON.stringify(resolved.channel)),
         advancedConfig: resolveModelAdvancedConfig(resolved.channel.advancedConfig, resolved.upstreamModel),
         capabilityProfile: resolved.capabilityProfile,
     };

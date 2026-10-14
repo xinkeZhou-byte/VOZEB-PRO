@@ -1,4 +1,4 @@
-import { getAuthSettings, refundUserPoints, type LogicalModelCapability } from "@/lib/auth/store";
+import { getAuthSettings, getFreshAuthSettings, refundUserPoints, type LogicalModelCapability } from "@/lib/auth/store";
 import { withCreativeFoundation, type CreativeReview } from "@/lib/creative-agent-contract";
 import { isCreativeAutoValue, type CreativeAsset, type CreativeGenerationPreferences, type CreativeSurface } from "@/lib/creative-runtime-contract";
 import { creativeAssetReferenceAliases } from "@/lib/creative-asset-references";
@@ -709,6 +709,7 @@ export function taskPath(type: AgentRunTask["type"]) {
 }
 
 export async function dispatchTask(task: AgentRunTask, origin: string, cookie: string, settings: Awaited<ReturnType<typeof getAuthSettings>>, run: AgentRun, executionId: string, attempt: number) {
+    settings = await getFreshAuthSettings();
     const directTextContent = run.surface === "canvas" ? directCanvasTextContent(task) : null;
     if (directTextContent) return { result: { content: directTextContent }, sourceTaskIds: [`direct-${run.id}-${task.id}`] };
     const model = resolvePlannedModel(settings, task.type, task.model);
@@ -835,7 +836,7 @@ export function linkAgentChildTask(run: AgentRun, task: AgentRunTask, taskId: st
         runId: run.id,
         surface: run.surface,
         projectId: run.projectId,
-        parentTaskId: run.id,
+        parentTaskId: task.id,
         attemptNo: attempt,
     });
 }

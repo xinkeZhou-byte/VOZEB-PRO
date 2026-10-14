@@ -42,6 +42,8 @@ import type { ImageTask } from "@/lib/server/image-task-store";
 import { requestStructuredText } from "@/lib/server/text-planning-runtime";
 import type { VideoTask } from "@/lib/server/video-task-store";
 import { queryVideoTaskUpstream } from "@/lib/server/video-task-runtime";
+import { createStoredGenerationTask } from "@/lib/server/generation-task-store";
+import { scheduleGenerationTask } from "@/lib/server/generation-task-scheduler";
 import { createProtocolFixtureServer } from "../../../scripts/protocol-fixture-server.mjs";
 
 const INTERNAL_ORIGIN = "http://internal.vozeb.test";
@@ -322,8 +324,8 @@ function imageTask(channel: ProxyChannel, edit: boolean): ImageTask {
         kind: edit ? "edit" : "generation",
         source: "image-workbench",
         status: "running",
-        createdAt: 1,
-        updatedAt: 1,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
         config: { ...channel.config, quality: "high" },
         candidateConfigs: [],
         prompt: "create a blue protocol test image",
@@ -343,7 +345,10 @@ function imageTask(channel: ProxyChannel, edit: boolean): ImageTask {
 async function runImage(task: ImageTask, protocol: SystemChannelProtocol) {
     const declarative = protocol === "custom" || protocol === "stable-diffusion" || protocol === "yumeng";
     const submitted = declarative ? await runCustomImageTask(task, INTERNAL_ORIGIN, fixtureOrigin, "", true) : await runOpenAiImageTask(task, INTERNAL_ORIGIN, fixtureOrigin, "", true);
-    return submitted.pending ? pollCustomImageTask(task, submitted.pending.id, submitted.pending.mediaBaseUrl, submitted.pending.pollBaseUrl, "", true) : submitted;
+    if (!submitted.pending) return submitted;
+    await createStoredGenerationTask("image", task, 60_000);
+    await scheduleGenerationTask("image", task.id, { executionPhase: "submitted", upstreamTaskId: submitted.pending.id, channelId: task.config.channelId });
+    return pollCustomImageTask(task, submitted.pending.id, submitted.pending.mediaBaseUrl, submitted.pending.pollBaseUrl, "", true);
 }
 
 function videoParameters() {
@@ -365,7 +370,10 @@ async function expectImageResult(result: { dataUrl?: string; remoteUrl?: string 
 
 async function expectVideoResult(channel: ProxyChannel, upstream: VideoTask["upstream"]) {
     expect(upstream?.id).toBeTruthy();
-    const result = await queryVideoTaskUpstream({ config: channel.config, upstream, userId: "proxy-user" } as unknown as VideoTask, INTERNAL_ORIGIN, "");
+    const task = { id: `local-${upstream.id}`, status: "running", config: channel.config, upstream, userId: "proxy-user", createdAt: Date.now(), updatedAt: Date.now() } as VideoTask;
+    await createStoredGenerationTask("video", task, 60_000);
+    await scheduleGenerationTask("video", task.id, { executionPhase: "submitted", upstreamTaskId: upstream.id, channelId: channel.config.channelId });
+    const result = await queryVideoTaskUpstream(task, INTERNAL_ORIGIN, "");
     expect(result).toMatchObject({ state: "result_ready" });
     if (result.state !== "result_ready") throw new Error(`video fixture did not return a result: ${result.state}`);
     const proxyUrl = `${INTERNAL_ORIGIN}${channel.config.baseUrl}/_media?url=${encodeURIComponent(result.resultUrl)}`;

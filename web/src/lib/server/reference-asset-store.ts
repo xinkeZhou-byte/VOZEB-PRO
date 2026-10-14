@@ -25,6 +25,7 @@ export type ReferenceMediaWriteContext = {
     taskId?: string;
     projectId?: string;
     maxBytes?: number;
+    storageKey?: string;
 };
 
 export async function writeReferenceImageDataUrl(dataUrl: string, context: ReferenceMediaWriteContext): Promise<StoredReferenceAsset> {
@@ -44,7 +45,13 @@ async function writeMediaDataUrl(dataUrl: string, expectedType: "image" | "video
     if (!parsed || !parsed.mimeType.startsWith(`${expectedType}/`)) throw new Error("参考素材格式不正确");
     if (parsed.bytes.length > Math.min(context.maxBytes || MAX_REFERENCE_BYTES[expectedType], MAX_REFERENCE_BYTES[expectedType])) throw new Error(`参考${expectedType === "image" ? "图" : expectedType === "video" ? "视频" : "音频"}文件过大`);
 
-    const token = createDatedMediaPath(persistent ? "permanent" : "temporary", expectedType, extensionFromMime(parsed.mimeType));
+    const token = context.storageKey || createDatedMediaPath(persistent ? "permanent" : "temporary", expectedType, extensionFromMime(parsed.mimeType));
+    if (!isReferenceAssetPath(token)) throw new Error("媒体存储路径无效");
+    const existing = context.storageKey ? await getLocalMediaRegistration(token) : null;
+    if (existing) {
+        if (existing.ownerUserId !== context.ownerUserId || existing.taskId !== context.taskId) throw new Error("媒体存储身份不匹配");
+        return { token, bytes: existing.bytes, mimeType: existing.mimeType, storage: existing.storageProvider === "object" ? "object" : "local" };
+    }
     const registration = referenceRegistration(token, persistent, expectedType, parsed.mimeType, parsed.bytes.length, context);
     const external = await persistExternalMediaIfEnabled({ registration, bytes: parsed.bytes });
     if (external) return { token, bytes: parsed.bytes.length, mimeType: parsed.mimeType, storage: "object" };

@@ -11,8 +11,17 @@ describe("agentTaskResultItems", () => {
         ).toEqual([{ url: "one" }, { url: "two" }, { url: "three" }]);
     });
 
-    it("limits untrusted result arrays to ten outputs", () => {
-        expect(agentTaskResultItems({ images: Array.from({ length: 20 }, (_, index) => ({ url: String(index) })) })).toHaveLength(10);
+    it("retains all successful batch outputs without an arbitrary output cap", () => {
+        expect(agentTaskResultItems({ images: Array.from({ length: 20 }, (_, index) => ({ url: String(index) })) })).toHaveLength(20);
+    });
+
+    it("handles deep wrappers and cycles without recursive stack growth", () => {
+        let nested: Record<string, unknown> = { url: "deep.png" };
+        for (let index = 0; index < 20_000; index += 1) nested = { result: nested };
+        expect(agentTaskResultItems(nested)).toEqual([{ url: "deep.png" }]);
+        const cycle: Record<string, unknown> = {};
+        cycle.result = cycle;
+        expect(agentTaskResultItems({ results: [cycle, { url: "valid.png" }] })).toEqual([{ url: "valid.png" }]);
     });
 
     it("normalizes provider wrappers and alternative media list keys", () => {

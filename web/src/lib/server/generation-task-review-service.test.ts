@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
     getImage: vi.fn(),
     updateImage: vi.fn(),
     markImageFailed: vi.fn(),
+    transitionImage: vi.fn(),
+    checkpoint: vi.fn(),
     getAudio: vi.fn(),
     updateAudio: vi.fn(),
     markAudioFailed: vi.fn(),
@@ -22,7 +24,8 @@ vi.mock("@/lib/server/generation-task-store", () => ({ getStoredGenerationTaskRe
 vi.mock("@/lib/server/generation-task-scheduler", () => ({ scheduleGenerationTask: mocks.schedule }));
 vi.mock("@/lib/server/text-task-store", () => ({ getTextTask: mocks.getText, updateTextTask: mocks.updateText, transitionTextTask: mocks.transitionText }));
 vi.mock("@/lib/server/text-task-runtime", () => ({ markTextTaskFailed: mocks.markTextFailed }));
-vi.mock("@/lib/server/image-task-store", () => ({ getImageTask: mocks.getImage, updateImageTask: mocks.updateImage }));
+vi.mock("@/lib/server/image-task-store", () => ({ getImageTask: mocks.getImage, updateImageTask: mocks.updateImage, transitionImageTask: mocks.transitionImage }));
+vi.mock("@/lib/server/image-result-checkpoint", () => ({ captureImageResultCheckpoint: mocks.checkpoint, IMAGE_CHECKPOINT_RESULT_URL: "checkpoint://image-task-result" }));
 vi.mock("@/lib/server/image-task-runtime", () => ({ markImageTaskFailed: mocks.markImageFailed }));
 vi.mock("@/lib/server/audio-task-store", () => ({ getAudioTask: mocks.getAudio, updateAudioTask: mocks.updateAudio }));
 vi.mock("@/lib/server/audio-task-runtime", () => ({ markAudioTaskFailed: mocks.markAudioFailed }));
@@ -71,6 +74,20 @@ describe("generation task manual review", () => {
             executionPhase: "result_ready",
         });
         expect(mocks.schedule).toHaveBeenLastCalledWith("video", "video-one", expect.objectContaining({ executionPhase: "result_ready", resultPayload: { url: "https://cdn.example/video.mp4" } }));
+    });
+
+    it("rearms an existing checkpoint awaiting review without replacing it or submitting upstream", async () => {
+        const task = { id: "image-one", status: "running", resultCheckpoint: { outputs: [{ sourceUrl: "https://cdn.example/original.png" }] } };
+        mocks.getImage.mockResolvedValue(task);
+        mocks.transitionImage.mockResolvedValue(task);
+        await expect(reviewGenerationTask("image", task.id, { action: "provide_result", result: "https://cdn.example/other.png" })).resolves.toMatchObject({ executionPhase: "result_ready", existingResult: true });
+        expect(mocks.checkpoint).not.toHaveBeenCalled();
+        expect(mocks.transitionImage).toHaveBeenCalledWith(
+            task,
+            ["pending", "running", "error"],
+            expect.objectContaining({ status: "running" }),
+            expect.objectContaining({ executionPhase: "result_ready", resultPayload: { url: "checkpoint://image-task-result" } }),
+        );
     });
 
     it("completes a text task directly with the supplied final text", async () => {

@@ -45,6 +45,7 @@ type ImageTaskPayload = {
             result?: ImageGenerationResult & { results?: ImageGenerationResult[] };
             error?: string;
             canRetry?: boolean;
+            canRecoverResult?: boolean;
         };
     error?: string;
 };

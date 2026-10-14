@@ -2,13 +2,15 @@ import { runGenerationTaskRecoveryBatch } from "@/lib/server/generation-task-rec
 import { scheduleGenerationTask } from "@/lib/server/generation-task-scheduler";
 import { getStoredGenerationTaskRecord } from "@/lib/server/generation-task-store";
 import type { GenerationTaskType } from "@/lib/server/generation-task-types";
+import { IMAGE_CHECKPOINT_RESULT_URL } from "@/lib/server/image-result-checkpoint";
 
 type RecoverableGenerationTaskType = Exclude<GenerationTaskType, "agent">;
 
 export async function recoverGenerationTaskFromUpstream(input: {
     type: RecoverableGenerationTaskType;
     id: string;
-    upstreamTaskId: string;
+    upstreamTaskId?: string;
+    resultCheckpoint?: boolean;
     channelId?: string;
     provider?: string;
     queryPath?: string;
@@ -18,7 +20,7 @@ export async function recoverGenerationTaskFromUpstream(input: {
     cookie?: string;
 }) {
     const rearmed = await scheduleGenerationTask(input.type, input.id, {
-        executionPhase: "polling",
+        executionPhase: input.resultCheckpoint ? "result_ready" : "polling",
         upstreamTaskId: input.upstreamTaskId,
         channelId: input.channelId,
         provider: input.provider,
@@ -26,6 +28,7 @@ export async function recoverGenerationTaskFromUpstream(input: {
         submittedAt: input.submittedAt,
         nextPollAt: Date.now(),
         lastUpstreamStatus: "user_recovery_requested",
+        ...(input.resultCheckpoint ? { resultPayload: { url: IMAGE_CHECKPOINT_RESULT_URL } } : {}),
     });
     if (!rearmed) return false;
 

@@ -1,4 +1,5 @@
 "use client";
+import { AdminGenerationCalls } from "./admin-generation-calls";
 
 import { Button, Checkbox, Popconfirm, Tag } from "antd";
 import { Eye, Film, Image as ImageIcon, Trash2 } from "lucide-react";
@@ -76,6 +77,7 @@ export function GenerationLogDetail({ log }: { log: StoredGenerationLog }) {
                 <InfoBox label="数量" value={`成功 ${log.successCount} / 失败 ${log.failCount} / 共 ${log.count}`} />
             </div>
             <GenerationLogResultSection log={log} />
+            <AdminGenerationCalls calls={log.requestSnapshot?.callAudit} />
             <div>
                 <div className="mb-1 text-sm font-semibold text-stone-950 dark:text-stone-100">提示词</div>
                 <div className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg border border-stone-200 bg-stone-50 p-3 text-sm leading-6 text-stone-700 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-200">{log.prompt || "-"}</div>
@@ -145,7 +147,7 @@ function GenerationLogResultSection({ log }: { log: StoredGenerationLog }) {
 function generationLogAssetAccessUrl(asset: StoredGenerationLog["assets"][number]) {
     const directUrl = asset.url && !asset.url.startsWith("/api/generation-log-assets/") && asset.url !== asset.serverUrl ? asset.url : "";
     const serverUrl = asset.serverUrl || (asset.url?.startsWith("/api/generation-log-assets/") ? asset.url : "");
-    return browserReadableMediaUrl(asset.remoteUrl || directUrl || serverUrl || asset.serverUrl || (asset.url?.startsWith("/api/generation-log-assets/") ? asset.url : ""));
+    return browserReadableMediaUrl(serverUrl || asset.remoteUrl || directUrl);
 }
 
 function formatAssetBytes(bytes: number) {

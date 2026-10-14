@@ -9,6 +9,7 @@ export default defineConfig({
         },
     },
     test: {
+        env: { VOZEB_PRO_ENCRYPTION_KEY: "71".repeat(32) },
         include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
     },
 });

@@ -1,5 +1,6 @@
 import { requestPublicOrigin } from "./image-task-reference-urls";
 import { after, NextResponse } from "next/server";
+import { getFreshAuthSettings } from "@/lib/auth/store";
 
 import { readJsonBody } from "@/lib/auth/request";
 import { getCurrentUser } from "@/lib/auth/session";
@@ -160,7 +161,7 @@ export async function POST(request: Request) {
         ...(headerAttemptNo ? { attemptNo: headerAttemptNo } : {}),
         ...(layerGrant ? { concurrencyClass: "canvas-layer" as const } : {}),
     };
-    const settings = await getAuthSettings();
+    const settings = await getFreshAuthSettings();
     const createTask = async () => {
         const configs = sanitizeConfigs(resolvedBody.config, settings);
         const prompt = (resolvedBody.prompt || "").trim();

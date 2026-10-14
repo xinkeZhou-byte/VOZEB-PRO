@@ -10,6 +10,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
+import { useAdminGenerationChanges } from "@/hooks/use-admin-generation-changes";
 
 import type { AuthSettings, PublicUser, PublicUserSummary } from "@/lib/auth/store";
 import type { AdminSetupSummary } from "@/lib/server/admin-setup-status";
@@ -153,6 +154,8 @@ export function AdminDashboard(props: AdminDashboardProps) {
         activeSectionInfo,
         nextSetupStep,
     } = controller;
+    useAdminGenerationChanges(activeSection === "logs" ? controller.generationLogs.map((log) => `log:${log.id}`) : [], () => controller.loadGenerationLogs());
+    const currentGenerationLog = controller.generationLogs.find((log) => log.id === viewingGenerationLog?.id) || viewingGenerationLog;
     return (
         <div data-hydrated={hydrated ? "true" : "false"} className={`admin-mobile-safe admin-dashboard-shell min-h-dvh w-full min-w-0 ${desktopNavCollapsed ? "is-sidebar-collapsed" : ""}`}>
             {mobileNavOpen ? <button type="button" className="admin-section-nav-backdrop lg:hidden" aria-label="收起后台侧边栏" onClick={() => setMobileNavOpen(false)} /> : null}
@@ -309,7 +312,7 @@ export function AdminDashboard(props: AdminDashboardProps) {
             </Modal>
             <AdminUserEditorModal controller={controller} />
             <Modal title="生成日志详情" open={Boolean(viewingGenerationLog)} footer={null} onCancel={() => setViewingGenerationLog(null)} width={860}>
-                {viewingGenerationLog ? <GenerationLogDetail log={viewingGenerationLog} /> : null}
+                {currentGenerationLog ? <GenerationLogDetail log={currentGenerationLog} /> : null}
             </Modal>
             <Modal title="CDK 明细" open={Boolean(viewingCdkCode)} footer={null} onCancel={() => setViewingCdkCode(null)} width={760}>
                 {viewingCdkCode ? (

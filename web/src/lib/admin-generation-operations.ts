@@ -1,6 +1,7 @@
 import type { GenerationTaskType } from "@/lib/server/generation-task-store";
 import type { GenerationAttempt } from "@/lib/server/generation-attempt";
 import type { GenerationTaskExecutionPhase } from "@/lib/server/generation-task-scheduler";
+import type { GenerationCallAudit } from "@/lib/generation-call-audit";
 
 export type AdminGenerationTask = {
     id: string;
@@ -30,6 +31,7 @@ export type AdminGenerationTask = {
     upstreamTaskId?: string;
     lastUpstreamStatus?: string;
     attempts?: GenerationAttempt[];
+    calls?: GenerationCallAudit[];
     prompt: string;
     error?: string;
     durationMs: number;
@@ -40,6 +42,8 @@ export type AdminGenerationTask = {
         mode: "direct" | "model";
         logicalModelId?: string;
         channelId?: string;
+        channelName?: string;
+        capturedAt?: number;
         upstreamModel?: string;
         protocol?: "responses" | "chat" | "gemini" | "custom";
         elapsedMs?: number;

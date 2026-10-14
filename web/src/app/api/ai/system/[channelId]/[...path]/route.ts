@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
-import { consumeUserPoints, getAuthSettings, isAuthInputError, isQuotaExceededError, refundUserPoints, type ApiCallFormat, type GenerationPointMultipliers, type PointUsageKind } from "@/lib/auth/store";
+import { consumeUserPoints, getAuthSettings, getFreshAuthSettings, isAuthInputError, isQuotaExceededError, refundUserPoints, type ApiCallFormat, type GenerationPointMultipliers, type PointUsageKind } from "@/lib/auth/store";
 import { getCurrentUser } from "@/lib/auth/session";
 import { DEFAULT_CHANNEL_CONNECT_ERROR } from "@/lib/server/generation-errors";
 import { UnsupportedMediaContentError } from "@/lib/server/media-content-validation";
@@ -24,6 +24,7 @@ import { authorizeGenerationMediaProxyRequest } from "@/lib/server/generation-me
 import { SYSTEM_PROXY_JSON_BODY_MAX_BYTES } from "@/lib/server/system-proxy-request-limits";
 import { userOwnsGenerationUpstreamTask } from "@/lib/server/generation-task-authorization";
 import { authorizeSystemAiProxyRequest } from "@/lib/server/system-ai-proxy-policy";
+import { readSubmittedGenerationRoute } from "@/lib/server/generation-task-route";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,11 +71,11 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
     if (!userId) return NextResponse.json({ error: "请先登录" }, { status: 401 });
 
     const { channelId, path } = await context.params;
-    const settings = await getAuthSettings();
-    const channel = settings.systemChannels.find((item) => item.id === channelId && item.enabled);
-    if (!channel || !channelConnectionReady(channel)) return NextResponse.json({ error: "默认接口未配置或已停用" }, { status: 404 });
+    const settings = await getFreshAuthSettings();
+    let channel = settings.systemChannels.find((item) => item.id === channelId);
 
     if (isMediaProxyPath(path)) {
+        if (!channel || !channelConnectionReady(channel)) return NextResponse.json({ error: "默认接口未配置或已停用" }, { status: 404 });
         const rate = await checkMediaProxyRateLimit(userId, request);
         if (!rate.allowed) return NextResponse.json({ error: "媒体访问过于频繁，请稍后重试" }, { status: 429, headers: rateLimitHeaders(rate) });
         return proxySystemMediaRequest(request, channel, userId);
@@ -92,6 +93,11 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
         throw error;
     }
     const upstreamModel = readRequestModel(readRequestBody(contentType, requestBody.pointsPayload)) || request.headers.get(SYSTEM_AI_UPSTREAM_MODEL_HEADER)?.trim() || readPathModel(path);
+    const submittedRoute = await readSubmittedGenerationRoute(request.headers, userId, channelId, upstreamModel);
+    if (submittedRoute === null) return NextResponse.json({ error: "任务不存在或无权访问" }, { status: 404 });
+    channel = submittedRoute?.channel || channel;
+    if (!channel || !channelConnectionReady(channel)) return NextResponse.json({ error: "默认接口未配置或已停用" }, { status: 404 });
+    const logicalModels = submittedRoute ? [submittedRoute.logicalModel] : settings.logicalModels || [];
     const modelConfig = upstreamModel ? resolveChannelModelConfig(channel.advancedConfig, upstreamModel) : undefined;
     const apiFormat = modelConfig?.apiFormat || channel.apiFormat;
     const globalChannel = isGlobalAiOpcChannel(channel.advancedConfig);
@@ -108,7 +114,7 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
             channel.id,
             [globalPreset?.createPath, modelConfig?.createPath, modelConfig?.editPath, modelConfig?.imageToVideoPath, channel.advancedConfig?.createPath, channel.advancedConfig?.editPath, channel.advancedConfig?.imageToVideoPath],
             upstreamModel,
-            settings.logicalModels,
+            logicalModels,
             settings.generationPointMultipliers,
         );
     if (pointsRequest?.model && !channelHasModel(channel.models, pointsRequest.model)) return NextResponse.json({ error: "该模型未在后台渠道中启用" }, { status: 403 });
@@ -119,7 +125,7 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
         channelId: channel.id,
         upstreamModel,
         preferredLogicalModelId: request.headers.get(SYSTEM_AI_LOGICAL_MODEL_HEADER) || "",
-        logicalModels: settings.logicalModels || [],
+        logicalModels,
         apiFormat: globalPreset?.apiFormat || apiFormat,
         pointsUsageKind: pointsRequest?.usageKind,
         upstreamTaskIdHint: readRequestTaskId(readRequestBody(contentType, requestBody.pointsPayload)),
@@ -133,6 +139,8 @@ async function proxySystemRequest(request: Request, context: RouteContext) {
         },
     });
     if (!access.allowed) return NextResponse.json({ error: access.error }, { status: access.status });
+    if (submittedRoute && (access.operation === "create" || access.upstreamTaskId !== submittedRoute.upstreamTaskId)) return NextResponse.json({ error: "历史渠道只允许查询或取消原任务" }, { status: 403 });
+    if (access.operation === "create" && !channel.enabled) return NextResponse.json({ error: "默认接口已停用" }, { status: 404 });
     if (access.operation !== "create") {
         const owned = await userOwnsGenerationUpstreamTask({ userId, capability: access.capability, channelId: channel.id, upstreamModel, upstreamTaskId: access.upstreamTaskId });
         if (!owned) return NextResponse.json({ error: "任务不存在或无权访问" }, { status: 404 });
@@ -661,7 +669,7 @@ function normalizeApiBaseUrl(baseUrl: string, apiFormat: "openai" | "gemini", gl
 
 function responseHeaders(headers: Headers, pointsResult?: Awaited<ReturnType<typeof consumeUserPoints>> | null, refundedPointsRemaining?: number | null, upstreamUrl?: string) {
     const nextHeaders = new Headers();
-    const passthrough = ["content-type", "cache-control", "content-disposition"];
+    const passthrough = ["content-type", "cache-control", "content-disposition", "x-request-id"];
     passthrough.forEach((key) => {
         const value = headers.get(key);
         if (value) nextHeaders.set(key, value);

@@ -86,6 +86,7 @@ export type GenerationTaskLogResultInput = {
     taskPollPath?: string;
     serverTaskId?: string;
     createdAt: string | number;
+    callAudit?: import("@/lib/generation-call-audit").GenerationCallAudit[];
 };
 
 export type GenerationLogListOptions = {

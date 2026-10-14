@@ -4,6 +4,11 @@ export const SYSTEM_AI_LOGICAL_MODEL_HEADER = "x-vozeb-pro-logical-model";
 export const SYSTEM_AI_POINTS_IDEMPOTENCY_HEADER = "x-vozeb-pro-points-idempotency-key";
 export const SYSTEM_AI_POINTS_SIGNATURE_HEADER = "x-vozeb-pro-points-signature";
 export const SYSTEM_AI_UPSTREAM_MODEL_HEADER = "x-vozeb-pro-upstream-model";
+export const SYSTEM_AI_TASK_HEADER = "x-vozeb-pro-generation-task";
+
+export function systemAiTaskHeaders(type: "text" | "image" | "video" | "audio", taskId: string) {
+    return { [SYSTEM_AI_TASK_HEADER]: `${type}:${taskId}` };
+}
 
 const SYSTEM_AI_POINTS_SIGNATURE_VERSION = "v1";
 const SYSTEM_AI_POINTS_PROCESS_SECRET = "__vozebProSystemAiPointsProcessSecret" as const;

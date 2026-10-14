@@ -15,7 +15,7 @@ vi.mock("@/lib/auth/store", () => {
     }
     return {
         AuthInputError,
-        getAuthSettings: vi.fn(async () => ({
+        getFreshAuthSettings: vi.fn(async () => ({
             systemChannels: [],
             logicalModels: [],
             defaultModels: { audioModel: "" },

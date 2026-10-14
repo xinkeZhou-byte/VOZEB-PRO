@@ -93,7 +93,7 @@ export async function pollCustomImageTask(task: ImageTask, taskId: string, media
     let lastError = "";
     for (let attempt = 0; attempt < (singleStep ? 1 : imageTaskPollAttempts(config)); attempt += 1) {
         for (const url of imageTaskPollUrls(config, pollBaseUrl, taskId)) {
-            const response = await taskFetch(config, url, { headers: taskHeaders(config, cookie), cache: "no-store" });
+            const response = await taskFetch(config, url, { headers: taskHeaders(config, cookie, undefined, task.id), cache: "no-store" });
             if (!response.ok) {
                 lastError = await readFetchError(response, "自定义图片任务查询失败");
                 continue;

@@ -17,6 +17,7 @@ vi.mock("next/server", async (importOriginal) => {
 vi.mock("@/lib/auth/session", () => ({ getCurrentUser: vi.fn(async () => ({ id: "user-one", role: "user" })) }));
 vi.mock("@/lib/auth/store", () => ({
     getAuthSettings: mocks.getAuthSettings,
+    getFreshAuthSettings: mocks.getAuthSettings,
     isAuthInputError: vi.fn(() => false),
     refundUserPoints: vi.fn(),
 }));

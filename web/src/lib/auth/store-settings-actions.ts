@@ -35,7 +35,9 @@ export async function getAuthSettings() {
 
 export async function getFreshAuthSettings() {
     if (!isPostgresDatabaseEnabled()) return (await readAuthDb()).settings;
+    const requestVersion = postgresAuthSettingsVersion;
     const settings = await readPostgresAuthSettings();
+    if (requestVersion !== postgresAuthSettingsVersion && postgresAuthSettingsCache) return postgresAuthSettingsCache.value;
     updatePostgresCache(settings);
     return settings;
 }

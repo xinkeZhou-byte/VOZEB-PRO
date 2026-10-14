@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
     getTask: vi.fn(),
     updateTask: vi.fn(),
     transitionTask: vi.fn(),
+    mutateTask: vi.fn(),
+    writeReference: vi.fn(),
+    getRegistration: vi.fn(),
     schedule: vi.fn(),
     writeLog: vi.fn(),
     inlineResult: vi.fn(),
@@ -40,7 +43,7 @@ vi.mock("@/app/api/image-tasks/image-task-support", () => ({
     resolveProxiedMediaSource: mocks.resolveMedia,
 }));
 vi.mock("@/app/api/image-tasks/image-task-runner", () => ({ stableMediaUrl: vi.fn((value: string) => (value && !value.startsWith("data:") ? value : "")), writeImageGenerationLog: mocks.writeLog }));
-vi.mock("@/lib/auth/store", () => ({ getAuthSettings: mocks.getSettings, refundUserPoints: mocks.refund }));
+vi.mock("@/lib/auth/store", () => ({ getAuthSettings: mocks.getSettings, getFreshAuthSettings: mocks.getSettings, refundUserPoints: mocks.refund }));
 vi.mock("@/lib/server/creative-runtime-service", () => ({ registerGenerationTaskAssetsForUser: mocks.register }));
 vi.mock("@/lib/server/generation-task-scheduler", () => ({ scheduleGenerationTask: mocks.schedule }));
 vi.mock("@/lib/server/generation-log-repository", () => ({ normalizeAssets: mocks.normalizeAssets, deleteLocalAsset: mocks.deleteAsset }));
@@ -48,7 +51,10 @@ vi.mock("@/lib/server/image-task-store", () => ({
     getImageTask: mocks.getTask,
     updateImageTask: mocks.updateTask,
     transitionImageTask: mocks.transitionTask,
+    mutateImageTask: mocks.mutateTask,
 }));
+vi.mock("@/lib/server/reference-asset-store", () => ({ writeReferenceImageDataUrl: mocks.writeReference }));
+vi.mock("@/lib/server/local-media-registry", () => ({ getLocalMediaRegistration: mocks.getRegistration }));
 vi.mock("@/lib/server/maintenance-auth", () => ({ maintenanceWorkerContext: vi.fn(() => "worker-context") }));
 vi.mock("@/lib/server/generation-media-authorization", () => ({ generationMediaProxyHeaders: mocks.mediaHeaders }));
 
@@ -59,10 +65,12 @@ import type { ImageTask } from "./image-task-store";
 
 describe("image task runtime submission safety", () => {
     let state: ImageTask;
+    const rawMedia = new Map<string, string>();
 
     beforeEach(() => {
         vi.clearAllMocks();
         state = imageTask();
+        rawMedia.clear();
         mocks.getTask.mockImplementation(async () => state);
         mocks.updateTask.mockImplementation(async (_id: string, patch: Partial<ImageTask>) => {
             state = { ...state, ...patch };
@@ -73,9 +81,18 @@ describe("image task runtime submission safety", () => {
             state = { ...state, ...patch };
             return state;
         });
+        mocks.mutateTask.mockImplementation(async (_id: string, mutation: (task: ImageTask) => ImageTask | null) => {
+            const updated = mutation(state);
+            if (updated) state = updated;
+            return updated;
+        });
+        mocks.writeReference.mockImplementation(async (dataUrl: string, context: { storageKey: string }) => {
+            rawMedia.set(`/api/reference-assets/${context.storageKey}`, dataUrl);
+            return { token: context.storageKey };
+        });
         mocks.getSettings.mockResolvedValue({ generationPointMultipliers: { imageQuality: {} } });
         mocks.inlineResult.mockImplementation(async (dataUrl: string) => ({ dataUrl }));
-        mocks.referenceDataUrl.mockImplementation(async (reference: { dataUrl: string }) => reference.dataUrl);
+        mocks.referenceDataUrl.mockImplementation(async (reference: { dataUrl: string }) => rawMedia.get(reference.dataUrl) || reference.dataUrl);
         mocks.normalizeAssets.mockImplementation(async (assets: Array<{ url: string; remoteUrl?: string }>) => {
             const source = assets[0];
             const name = source.url.includes("first") ? "first" : source.url.includes("second") ? "second" : `asset-${mocks.normalizeAssets.mock.calls.length}`;
@@ -216,10 +233,10 @@ describe("image task runtime submission safety", () => {
         expect(mocks.refund).toHaveBeenCalledOnce();
     });
 
-    it("commits image success before writing the generation log", async () => {
+    it("keeps completion recoverable until the log and asset registration finish", async () => {
         state = { ...imageTask(), status: "running", result: { dataUrl: "data:image/png;base64,c2FmZQ==" } };
         mocks.writeLog.mockImplementationOnce(async () => {
-            expect(state.status).toBe("success");
+            expect(state.status).toBe("running");
             return undefined;
         });
 
@@ -227,7 +244,7 @@ describe("image task runtime submission safety", () => {
         expect(mocks.writeLog).toHaveBeenCalledOnce();
     });
 
-    it("fails a corrupt synchronous image result before publishing it as ready", async () => {
+    it("keeps the original checkpoint when synchronous image processing fails", async () => {
         state = imageTask();
         state.config = { ...state.config, advancedConfig: { ...emptyAdvancedConfig(), protocol: "openai" } };
         state.candidateConfigs = [];
@@ -235,8 +252,12 @@ describe("image task runtime submission safety", () => {
         mocks.normalizeAssets.mockRejectedValueOnce(new Error("pngload_buffer: libspng read error"));
 
         const step = await createImageTaskUpstreamStep(state, "http://internal", "https://public.example");
-        expect(step).toMatchObject({ state: "failed", error: expect.stringContaining("pngload_buffer") });
-        expect(mocks.schedule).not.toHaveBeenCalledWith("image", "image-one", expect.objectContaining({ executionPhase: "result_ready" }));
+        expect(step).toMatchObject({ state: "result_ready", resultUrl: "checkpoint://image-task-result" });
+        if (step.state !== "result_ready") throw new Error("missing checkpoint");
+        await expect(persistImageTaskResult(state, "http://internal", step.resultUrl)).rejects.toThrow("pngload_buffer");
+        expect(state.resultCheckpoint?.outputs[0].privateMediaKey).toBeTruthy();
+        expect(state.diagnostics?.at(-1)).toMatchObject({ stage: "image_process", message: expect.stringContaining("pngload_buffer") });
+        expect(mocks.refund).not.toHaveBeenCalled();
         expect(state.result).toBeUndefined();
     });
 
@@ -247,10 +268,11 @@ describe("image task runtime submission safety", () => {
 
         const step = await createImageTaskUpstreamStep(state, "http://internal", "https://public.example");
 
-        expect(step).toMatchObject({ state: "result_ready", resultUrl: expect.stringContaining("/api/generation-log-assets/") });
-        expect(JSON.stringify(state.result)).not.toContain("data:image");
-        expect(state.result?.dataUrl).toMatch(/^\/api\/generation-log-assets\//);
-        expect(mocks.schedule).toHaveBeenLastCalledWith("image", "image-one", expect.objectContaining({ executionPhase: "result_ready", resultPayload: { url: state.result?.dataUrl }, lastUpstreamStatus: "completed" }));
+        expect(step).toMatchObject({ state: "result_ready", resultUrl: "checkpoint://image-task-result" });
+        expect(JSON.stringify(state)).not.toContain("data:image");
+        expect(state.resultCheckpoint?.outputs[0].privateMediaKey).toMatch(/^temporary\//);
+        expect(mocks.normalizeAssets).not.toHaveBeenCalled();
+        expect(mocks.schedule).toHaveBeenLastCalledWith("image", "image-one", expect.objectContaining({ executionPhase: "result_ready", resultPayload: { url: "checkpoint://image-task-result" }, lastUpstreamStatus: "completed" }));
     });
 
     it("resumes a prepared result without creating the upstream task again", async () => {
@@ -265,7 +287,7 @@ describe("image task runtime submission safety", () => {
         expect(mocks.schedule).toHaveBeenLastCalledWith("image", "image-one", expect.objectContaining({ executionPhase: "result_ready", resultPayload: { url: serverUrl } }));
     });
 
-    it("removes a newly prepared asset when cancellation wins the persistence race", async () => {
+    it("does not publish a result when cancellation wins the persistence race", async () => {
         state.config = { ...state.config, advancedConfig: { ...emptyAdvancedConfig(), protocol: "openai" } };
         state.candidateConfigs = [];
         mocks.runOpenAi.mockResolvedValueOnce({ dataUrl: "data:image/png;base64,c2FmZQ==", pointsCost: 1, pointsRecordId: "record-one" });
@@ -275,9 +297,10 @@ describe("image task runtime submission safety", () => {
             return [{ type: "image", url: serverUrl, serverUrl }];
         });
 
-        await expect(createImageTaskUpstreamStep(state, "http://internal", "https://public.example")).resolves.toMatchObject({ state: "failed", status: "cancelled" });
-
-        expect(mocks.deleteAsset).toHaveBeenCalledWith("/api/generation-log-assets/cancelled.png");
+        const step = await createImageTaskUpstreamStep(state, "http://internal", "https://public.example");
+        if (step.state !== "result_ready") throw new Error("missing checkpoint");
+        await expect(persistImageTaskResult(state, "http://internal", step.resultUrl)).resolves.toMatchObject({ status: "cancelled" });
+        expect(mocks.deleteAsset).not.toHaveBeenCalled();
         expect(state.result).toBeUndefined();
     });
 

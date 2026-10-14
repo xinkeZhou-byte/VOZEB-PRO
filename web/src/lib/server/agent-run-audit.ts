@@ -1,5 +1,6 @@
 import type { AgentSkill, AgentSkillWorkspace } from "@/lib/auth/store-types";
 import type { TextPlanningProtocol } from "@/lib/server/text-planning-runtime";
+import type { GenerationAttempt } from "./generation-attempt";
 
 export const AGENT_PLAN_SCHEMA_VERSION = 2 as const;
 
@@ -29,36 +30,45 @@ export type AgentRunPlannerAudit = {
     mode: "direct" | "model";
     logicalModelId?: string;
     channelId?: string;
+    channelName?: string;
+    capturedAt?: number;
     upstreamModel?: string;
     protocol?: TextPlanningProtocol;
     elapsedMs?: number;
     pointsCost?: number;
     pointsRecordId?: string;
     skills: AgentRunSkillSnapshot[];
+    attempts?: GenerationAttempt[];
 };
 
 export function buildAgentRunPlannerAudit(input: {
     mode: AgentRunPlannerAudit["mode"];
     logicalModelId?: string;
     channelId?: string;
+    channelName?: string;
+    capturedAt?: number;
     upstreamModel?: string;
     protocol?: TextPlanningProtocol;
     elapsedMs?: number;
     pointsCost?: number;
     pointsRecordId?: string;
     skills: AgentSkill[];
+    attempts?: GenerationAttempt[];
 }): AgentRunPlannerAudit {
     return {
         schemaVersion: AGENT_PLAN_SCHEMA_VERSION,
         mode: input.mode,
         ...(input.logicalModelId ? { logicalModelId: input.logicalModelId } : {}),
         ...(input.channelId ? { channelId: input.channelId } : {}),
+        ...(input.channelName ? { channelName: input.channelName } : {}),
+        ...(input.capturedAt ? { capturedAt: input.capturedAt } : {}),
         ...(input.upstreamModel ? { upstreamModel: input.upstreamModel } : {}),
         ...(input.protocol ? { protocol: input.protocol } : {}),
         ...(Number.isFinite(input.elapsedMs) && input.elapsedMs! >= 0 ? { elapsedMs: input.elapsedMs } : {}),
         ...(Number.isFinite(input.pointsCost) && input.pointsCost! >= 0 ? { pointsCost: input.pointsCost } : {}),
         ...(input.pointsRecordId ? { pointsRecordId: input.pointsRecordId } : {}),
         skills: input.skills.map(snapshotAgentSkill),
+        ...(input.attempts ? { attempts: input.attempts } : {}),
     };
 }
 

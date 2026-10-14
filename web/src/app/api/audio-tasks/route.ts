@@ -2,7 +2,7 @@ import { after, NextResponse } from "next/server";
 
 import { readJsonBody } from "@/lib/auth/request";
 import { getCurrentUser } from "@/lib/auth/session";
-import { getAuthSettings, isAuthInputError } from "@/lib/auth/store";
+import { getFreshAuthSettings, isAuthInputError } from "@/lib/auth/store";
 import { mediaTaskSource } from "@/lib/media-management-contract";
 import { resolveAudioTaskOptions } from "@/lib/server/audio-task-config";
 import { createAudioTask, type AudioTask, type AudioTaskConfig } from "@/lib/server/audio-task-store";
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
     const rate = await checkGenerationRateLimit(user.id, request, "audio");
     if (!rate.allowed) return NextResponse.json({ error: "音频生成请求过于频繁，请稍后重试" }, { status: 429, headers: rateLimitHeaders(rate) });
-    const settings = await getAuthSettings();
+    const settings = await getFreshAuthSettings();
     const response = await withGenerationConcurrencyLimit(user.id, "audio", 10 * 60 * 1000, settings.generationConcurrency.audio, async () => {
         let body: { config?: AudioTaskConfig; prompt?: string; source?: string; context?: GenerationTaskContext };
         try {

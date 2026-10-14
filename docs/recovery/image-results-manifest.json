@@ -1,0 +1,38 @@
+{
+  "description": "仅用于隔离本地演练；生产操作须先核对原任务归属和原助手消息，不能创建替代业务记录。",
+  "outputs": [
+    {
+      "supplierRequestId": "fd7ea6e35db0440f5d4c6982f3596af5",
+      "taskId": "745ea41a-d8a5-493f-9d63-d552dceadcf7",
+      "runId": "agent-aBRMuyjY6lbV6GQWmEiJl",
+      "conversationId": "conversation-2G_X5cRpilQM8UZjKJz6x",
+      "agentAttempt": 1,
+      "points": 15,
+      "width": 3840,
+      "height": 2160,
+      "path": ".tmp/generation-log-diagnosis/upstream-outputs/fd7ea6e35db0440f5d4c6982f3596af5.png"
+    },
+    {
+      "supplierRequestId": "67bc14fa82a31c9907fa785df419ea2d",
+      "taskId": "e5e38872-47c3-49fa-8892-2145a8d94748",
+      "runId": "agent-aBRMuyjY6lbV6GQWmEiJl",
+      "conversationId": "conversation-2G_X5cRpilQM8UZjKJz6x",
+      "agentAttempt": 2,
+      "points": 15,
+      "width": 3840,
+      "height": 2160,
+      "path": ".tmp/generation-log-diagnosis/upstream-outputs/67bc14fa82a31c9907fa785df419ea2d.png"
+    },
+    {
+      "supplierRequestId": "66b6f51de29fab54aed6e3e17bd9c7c5",
+      "taskId": "23705d2e-7359-47b5-adb0-4c651e34254a",
+      "runId": "agent-Wn9rGFlzgr-RASzIrTz32",
+      "conversationId": "conversation-57QIJO4pot3KqL1Qo_j3C",
+      "agentAttempt": 1,
+      "points": 22.5,
+      "width": 2480,
+      "height": 3312,
+      "path": ".tmp/generation-log-diagnosis/upstream-outputs/66b6f51de29fab54aed6e3e17bd9c7c5.png"
+    }
+  ]
+}
