@@ -20,6 +20,8 @@ type EndpointMatch = EndpointSpec & {
 };
 
 const ENDPOINT_SPECS: EndpointSpec[] = [
+    { marker: "/images/generations/async", kind: "image" },
+    { marker: "/images/edits/async", kind: "image-edit" },
     { marker: "/kyyReactApiServer/v2/model-center/tasks", kind: "unknown" },
     { marker: "/v1/seedance-special/videos", kind: "video" },
     { marker: "/sdapi/v1/txt2img", kind: "image" },
@@ -139,7 +141,8 @@ export function parseChannelExampleConfig(example: string, channel: SystemModelC
     const model = findModel(requestBody, jsonBlocks, raw);
     const protocol = inferProtocol(raw, endpoint, requestBody, currentAdvanced.protocol);
     const documentFields = requestBody ? [] : documentRequestFields(raw);
-    const requestTemplate = requestBody || endpoint ? buildRequestTemplate(requestBody, kind, protocol, documentFields) : "";
+    const gemini = /:generateContent\b/i.test(endpoint?.createPath || "");
+    const requestTemplate = gemini ? '{"contents":[{"role":"user","parts":"{{parts}}"}]}' : requestBody || endpoint ? buildRequestTemplate(requestBody, kind, protocol, documentFields) : "";
     const resultField = inferResultField(jsonBlocks, requestBody, kind, raw);
     const statusField = inferStatusField(jsonBlocks, requestBody, raw);
     const referenceFields = uniqueList([...(requestBody && isRecord(requestBody) ? collectReferenceFields(requestBody) : []), ...documentFields.filter((field) => isReferenceKey(field))]);
@@ -154,10 +157,10 @@ export function parseChannelExampleConfig(example: string, channel: SystemModelC
         ...(model && (kind === "image" || kind === "image-edit") ? { imageModel: model } : {}),
         ...(model && kind === "video" ? { videoModel: model } : {}),
         ...(requestTemplate ? { requestTemplate } : {}),
-        ...(resultField ? { resultField } : {}),
+        ...(gemini && kind === "image" ? { resultField: "candidates" } : resultField ? { resultField } : /result\.data\[\]/i.test(raw) ? { resultField: "result.data" } : {}),
         ...(statusField ? { statusField } : {}),
         ...(referenceRule ? { referenceRule } : {}),
-        supportsReferenceImage: currentAdvanced.supportsReferenceImage || kind === "image-edit" || referenceFields.some((field) => IMAGE_REFERENCE_KEYS.has(field) || IMAGE_REFERENCE_KEYS.has(field.toLowerCase())),
+        supportsReferenceImage: currentAdvanced.supportsReferenceImage || kind === "image-edit" || (gemini && /inlineData|inline_data/i.test(raw)) || referenceFields.some((field) => IMAGE_REFERENCE_KEYS.has(field) || IMAGE_REFERENCE_KEYS.has(field.toLowerCase())),
         supportsReferenceVideo: currentAdvanced.supportsReferenceVideo || referenceFields.some((field) => VIDEO_REFERENCE_KEYS.has(field)),
         supportsReferenceAudio: currentAdvanced.supportsReferenceAudio || referenceFields.some((field) => AUDIO_REFERENCE_KEYS.has(field)),
     };
@@ -169,15 +172,19 @@ export function parseChannelExampleConfig(example: string, channel: SystemModelC
         advancedPatch.durationRange = inferDurationRange(requestBody, endpoint.createPath, raw);
     }
     if (kind === "image" && endpoint?.createPath) advancedPatch.createPath = endpoint.createPath;
+    if (gemini && kind === "image" && endpoint?.createPath) advancedPatch.editPath = endpoint.createPath;
     if (kind === "image-edit" && endpoint?.createPath) {
         advancedPatch.editPath = endpoint.createPath;
         if (endpoint.marker.toLowerCase().includes("model-center/tasks")) advancedPatch.createPath = endpoint.createPath;
     }
     if (kind === "text" && endpoint?.createPath) advancedPatch.createPath = endpoint.createPath;
     if (kind === "audio" && endpoint?.createPath) advancedPatch.createPath = endpoint.createPath;
+    const imageQueryPath = raw.match(/\/(?:[\w.-]+\/)*images\/tasks\/(?:\$\{?TASK_ID\}?|\{task_id\}|:task_id)/i)?.[0];
+    if (imageQueryPath) advancedPatch.queryPath = imageQueryPath.replace(/\$\{?TASK_ID\}?|\{task_id\}/i, ":task_id");
 
     const nextAdvanced: SystemChannelAdvancedConfig = { ...currentAdvanced, ...advancedPatch };
     const patch: Partial<SystemModelChannel> = { advancedConfig: nextAdvanced };
+    if (gemini) patch.apiFormat = "gemini";
     if (documentedBaseUrl) patch.baseUrl = documentedBaseUrl;
     if (apiKey) patch.apiKey = apiKey;
     if (model) patch.models = uniqueList([...channel.models, model]);
@@ -213,6 +220,10 @@ function matchEndpointUrl(value: string): EndpointMatch | null {
         const url = new URL(value);
         const pathname = url.pathname.replace(/%7B(?:task[_-]?id|id)%7D/gi, ":task_id").replace(/\/+$/g, "");
         const lowerPath = pathname.toLowerCase();
+        if (/:generateContent$/i.test(pathname)) {
+            const index = pathname.lastIndexOf("/models/");
+            if (index >= 0) return { marker: "/models/:model:generateContent", kind: "unknown", createPath: "/models/:model:generateContent", requestUrl: value, baseUrl: `${url.origin}${pathname.slice(0, index)}` };
+        }
         for (const spec of ENDPOINT_SPECS) {
             const index = lowerPath.lastIndexOf(spec.marker.toLowerCase());
             if (index < 0) continue;
@@ -251,16 +262,20 @@ function matchKnownEndpointUrl(value: string) {
 }
 
 function matchEndpointText(text: string): EndpointMatch | null {
+    const gemini = text.match(/\/(?:[\w.-]+\/)*models\/[^\s"'\\<>]+:generateContent\b/i)?.[0];
+    if (gemini) return { marker: "/models/:model:generateContent", kind: "unknown", createPath: gemini.replace(/\/models\/[^/]+:generateContent$/i, "/models/:model:generateContent") };
     const source = text.toLowerCase();
     const spec = ENDPOINT_SPECS.find((item) => source.includes(item.marker.toLowerCase()));
     if (spec) return { ...spec, createPath: spec.marker };
+    const variablePath = text.match(/["']\$(?:\{[\w]+\}|[\w]+)(\/[^\s"'\\<>]+)["']/)?.[1];
+    if (variablePath) return { marker: variablePath, kind: "unknown", createPath: variablePath.replace(/\$\{?TASK_ID\}?/i, ":task_id") };
     const request = text.match(/(?:^|\n)\s*(?:GET|POST|PUT|PATCH|DELETE)\s+(https?:\/\/[^\s"'\\<>]+|\/(?!\/)[^\s"'\\<>]+)/i)?.[1];
     if (!request) return null;
     return /^https?:\/\//i.test(request) ? matchEndpointUrl(request) : { marker: request, kind: "unknown", createPath: request.replace(/\{(?:task[_-]?id|id)\}/gi, ":task_id") };
 }
 
 function pickDocumentBaseUrl(text: string) {
-    const match = text.match(/(?:base\s*url|基础\s*url)\s*[:：]?\s*(https?:\/\/[^\s"'\\<>]+)/i);
+    const match = text.match(/(?:base\s*url|基础\s*url|[A-Z][A-Z0-9_]*_BASE)\s*(?:=|:|：)?\s*["']?(https?:\/\/[^\s"'\\<>]+)/i);
     return match?.[1]?.replace(/\/+$/g, "") || "";
 }
 
@@ -330,10 +345,11 @@ function pickRequestBody(blocks: unknown[]) {
 }
 
 function looksLikeRequestBody(value: Record<string, unknown>) {
-    return Boolean(value.model || value.prompt || value.messages || value.input || value.content || value.duration || value.seconds || Object.keys(value).some((key) => isReferenceKey(key)));
+    return Boolean(value.model || value.prompt || value.messages || value.contents || value.input || value.content || value.duration || value.seconds || Object.keys(value).some((key) => isReferenceKey(key)));
 }
 
 function inferKind(endpoint: EndpointMatch | null, requestBody: unknown, raw: string): ExampleKind {
+    if (/:generateContent\b/i.test(endpoint?.createPath || "")) return /inlineData|inline_data|imageConfig|生成.*图片|图像|生图|image\/|nano[-_.\s]?banana/i.test(raw) ? "image" : "text";
     if (endpoint?.kind && endpoint.kind !== "unknown") return endpoint.kind;
     const path = endpoint?.createPath || "";
     if (/audio|speech|voice|tts|music|sound/i.test(path)) return "audio";
@@ -383,6 +399,7 @@ function findModel(requestBody: unknown, blocks: unknown[], raw: string) {
 }
 
 function inferProtocol(raw: string, endpoint: EndpointMatch | null, requestBody: unknown, current: SystemChannelProtocol): SystemChannelProtocol {
+    if (/:generateContent\b/i.test(endpoint?.createPath || "") || /\/images\/(?:generations|edits)\/async\b/i.test(endpoint?.createPath || "")) return "custom";
     const source = `${raw}\n${endpoint?.requestUrl || ""}`.toLowerCase();
     if (source.includes("/kyyreactapiserver/v2/model-center/tasks")) return "yumeng";
     if (source.includes("/v1/seedance-special/videos") || source.includes("sd_2.0_special_") || source.includes("sd_2.0_fast_special_")) return "custom";
@@ -512,6 +529,7 @@ function collectReferenceFields(value: Record<string, unknown>) {
 }
 
 function inferReferenceRule(raw: string, kind: ExampleKind, protocol: SystemChannelProtocol, fields: string[]) {
+    if (/inlineData|inline_data/i.test(raw)) return "参考图使用 contents[].parts[].inlineData，包含 mimeType 与不带 data URL 前缀的 Base64 data。";
     if (/multipart\/form-data|\s-F\s|--form\b/i.test(raw)) return "参考图使用 multipart/form-data 文件上传，由平台自动组装。";
     if (protocol === "sub2api") return "图生图使用 JSON 请求体；参考图字段为 image_urls 字符串数组。站内素材会先保存到服务器，再使用站点地址提供给上游读取。";
     if (!fields.length && kind !== "image-edit") return "";

@@ -16,7 +16,7 @@ export async function writeImageGenerationLog(
     error?: string,
 ) {
     const results = Array.isArray(result) ? result : [result];
-    const targetSize = task.config.outputMode === "layers" ? undefined : resolveResultSize(task.config.quality, task.config.size || "auto");
+    const targetSize = task.config.outputMode === "layers" ? undefined : resolveResultSize(task.config.quality, task.config.size || "auto", task.config.resolution);
     const assets = results.flatMap((item) => {
         const resultUrl = typeof item === "string" ? item : item.dataUrl || item.remoteUrl || "";
         return resultUrl

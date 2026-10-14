@@ -208,7 +208,21 @@ export default function CreatePage() {
         }
         promptRevisionRef.current += 1;
         try {
-            const preferences = { ...generationPreferences, ...(creationMode !== "agent" ? { mode: creationMode } : {}) };
+            const preferences = {
+                ...generationPreferences,
+                ...(creationMode !== "agent" ? { mode: creationMode } : {}),
+                ...(creationMode === "image" || generationPreferences.image ? { image: { count: 1, ...generationPreferences.image } } : {}),
+                ...(creationMode === "video" || generationPreferences.video ? { video: { count: 1, ...generationPreferences.video } } : {}),
+            };
+            if (!smartPlanning) {
+                for (const capability of ["image", "video"] as const) {
+                    const modelCount = modelOptions.filter((model) => selectedModelIds.includes(model.id) && model.capability === capability).length;
+                    if (modelCount > (preferences[capability]?.count || 1)) {
+                        message.warning(`已选择 ${modelCount} 个${capability === "image" ? "图片" : "视频"}模型，请增加总数量或减少模型`);
+                        return;
+                    }
+                }
+            }
             if (
                 await agent.submit(prompt, {
                     publicPrompt: publicCreativeAssetPrompt(prompt),

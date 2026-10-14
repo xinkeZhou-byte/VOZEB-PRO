@@ -8,7 +8,7 @@ import { LabeledControl } from "@/components/admin/admin-settings-controls";
 import { applyChannelProtocol, channelProtocolDefinition, channelProtocolOptions } from "@/lib/channel-protocol-registry";
 import type { ChannelProtocolDraft } from "@/lib/channel-protocol-draft";
 import type { LogicalModelCapability, SystemChannelAdvancedConfig, SystemChannelAuthMode, SystemChannelProtocol, SystemModelChannel } from "@/lib/auth/store";
-import { normalizeModelId } from "@/lib/model-capability";
+import { inferModelCapability, normalizeModelId } from "@/lib/model-capability";
 import { createAdminChannelProtocolDraft } from "@/services/api/admin-channel-protocol";
 import { channelDetectedCapabilities } from "@/lib/model-routing-config";
 
@@ -64,7 +64,8 @@ export function AdminChannelProtocolSetup({ channel, protocolLocked = false, onC
         const discoveredModels: string[] = [];
         draft.operations.forEach((operation) => {
             operationConfigs[operation.capability] = operation.config;
-            operation.models.forEach((model) => {
+            const applicableModels = Array.from(new Set([...operation.models, ...channel.models.filter((model) => (modelCapabilities[normalizeModelId(model)] || modelConfigs[normalizeModelId(model)]?.capability || inferModelCapability(model)) === operation.capability)]));
+            applicableModels.forEach((model) => {
                 const key = normalizeModelId(model);
                 if (!key) return;
                 discoveredModels.push(model);

@@ -4,6 +4,7 @@ import { buildProviderRequest, isProviderBusinessError, readProviderError, readP
 import { buildYumengImageRequest, resolveYumengImageResolution } from "@/lib/yumeng-model-center";
 
 import { publicImageReferenceRequestUrl } from "./image-task-openai";
+import { runGeminiImageTask } from "./image-task-gemini";
 import { IMAGE_TASK_POLL_INTERVAL_MS, type ImageApiResponse, type ImageTaskResult } from "./image-task-types";
 import {
     findImageResults,
@@ -31,6 +32,10 @@ import {
 export async function runCustomImageTask(task: ImageTask, origin: string, publicOrigin: string, cookie: string, singleStep = false) {
     const config = task.config;
     const advanced = config.advancedConfig;
+    if (config.apiFormat === "gemini" && advanced?.protocol === "custom") {
+        if (!advanced.createPath) throw new GenerationSubmissionSafeFailure("自定义 Gemini 图片协议缺少创建路径");
+        return runGeminiImageTask(task, origin, cookie);
+    }
     if (!advanced?.createPath || !advanced.requestTemplate || !advanced.resultField) throw new GenerationSubmissionSafeFailure("自定义图片协议缺少创建路径、请求模板或结果字段");
     const size = resolveDeclarativeImageSize(config);
     const [width, height] = /^\d+x\d+$/.test(size) ? size.split("x").map(Number) : [undefined, undefined];
@@ -48,7 +53,7 @@ export async function runCustomImageTask(task: ImageTask, origin: string, public
         size,
         ratio: imageRequestAspectRatio(config.size || "auto"),
         aspect_ratio: imageRequestAspectRatio(config.size || "auto"),
-        resolution: advanced.protocol === "yumeng" ? resolveYumengImageResolution(config.model, config.quality) : config.quality || "auto",
+        resolution: config.resolution || (advanced.protocol === "yumeng" ? resolveYumengImageResolution(config.model, config.quality) : config.quality || "auto"),
         width,
         height,
         quality: config.quality || "auto",
@@ -83,8 +88,8 @@ export async function runCustomImageTask(task: ImageTask, origin: string, public
     });
 }
 
-export function resolveDeclarativeImageSize(config: Pick<ImageTask["config"], "quality" | "size" | "advancedConfig">) {
-    const size = resolveRequestSize(config.quality, config.size || "auto") || config.size || "";
+export function resolveDeclarativeImageSize(config: Pick<ImageTask["config"], "quality" | "resolution" | "size" | "advancedConfig">) {
+    const size = resolveRequestSize(config.quality, config.size || "auto", config.resolution) || config.size || "";
     return !size || size.toLowerCase() === "auto" ? "" : size;
 }
 

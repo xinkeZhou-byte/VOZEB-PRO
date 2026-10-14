@@ -5,7 +5,7 @@ import { Image, Modal } from "antd";
 import type { ImageProps } from "antd";
 import { Maximize2, PlayCircle } from "lucide-react";
 
-import { imagePreviewUrl } from "@/lib/media-image-url";
+import { imagePreviewUrl, originalImageSourceUrl } from "@/lib/media-image-url";
 import { cn } from "@/lib/utils";
 
 export const agentMediaPreviewPopupStyles = {
@@ -36,6 +36,8 @@ export function AgentMediaPreview({
     onDimensions?: (width: number, height: number) => void;
 }) {
     const [videoOpen, setVideoOpen] = useState(false);
+    const [imageOpen, setImageOpen] = useState(false);
+    const [originalQuality, setOriginalQuality] = useState(false);
     const mediaRootRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -63,6 +65,15 @@ export function AgentMediaPreview({
                 <Image
                     src={thumbnailUrl}
                     alt={title}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`预览图片：${title}`}
+                    onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            setImageOpen(true);
+                        }
+                    }}
                     onLoad={(event) => {
                         const image = event.currentTarget;
                         onDimensions?.(image.naturalWidth, image.naturalHeight);
@@ -74,7 +85,25 @@ export function AgentMediaPreview({
                     }}
                     styles={agentMediaPreviewPopupStyles}
                     preview={{
-                        src: largePreviewUrl,
+                        src: originalQuality ? originalImageSourceUrl(url) : largePreviewUrl,
+                        open: imageOpen,
+                        onOpenChange: (open) => {
+                            setImageOpen(open);
+                            if (!open) setOriginalQuality(false);
+                        },
+                        actionsRender: (actions) => (
+                            <div className="flex max-w-[calc(100vw-24px)] flex-wrap items-center justify-center gap-2">
+                                {actions}
+                                <button
+                                    type="button"
+                                    className="rounded-full border border-white/35 bg-black/60 px-3 py-2 text-xs font-medium text-white transition hover:bg-black/80 focus-visible:outline-2 focus-visible:outline-white disabled:cursor-default disabled:text-white/70"
+                                    disabled={originalQuality}
+                                    onClick={() => setOriginalQuality(true)}
+                                >
+                                    {originalQuality ? "最高画质原图" : "查看最高画质"}
+                                </button>
+                            </div>
+                        ),
                         getContainer: getAgentMediaPreviewContainer,
                         cover: (
                             <span className="inline-flex items-center gap-1.5 text-xs font-medium text-white">

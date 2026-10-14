@@ -35,6 +35,7 @@ export type CreativeAgentRun = {
         optimizedPrompt?: string;
         ratio?: string;
         quality?: string;
+        resolution?: string;
         seconds?: number;
         voice?: string;
         format?: string;

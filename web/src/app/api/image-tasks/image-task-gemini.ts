@@ -20,6 +20,7 @@ import { registerGenerationTaskAssetsForUser } from "@/lib/server/creative-runti
 import { createSignedReferenceAssetUrl, signReferenceAssetInputUrl } from "@/lib/server/reference-asset-access";
 import { assertCapabilityConstraints } from "@/lib/server/capability-constraints";
 import { GenerationSubmissionSafeFailure, GenerationSubmissionUncertainError } from "@/lib/server/generation-submission-error";
+import { buildProviderRequest } from "@/lib/server/provider-task-config";
 
 import {
     type CreateImageTaskBody,
@@ -103,6 +104,7 @@ import {
     stringField,
     delay,
     parseGeminiImagePayload,
+    imageRequestAspectRatio,
     toGeminiImagePart,
     buildImageEditFormData,
     imageReferenceToFile,
@@ -132,13 +134,21 @@ export async function runGeminiImageTask(task: ImageTask, origin: string, cookie
     ]);
     referenceDataUrls.forEach((dataUrl, index) => parts.push(toGeminiImagePart(dataUrl, task.references[index]?.type)));
     if (maskDataUrl) parts.push(toGeminiImagePart(maskDataUrl, task.mask?.type));
+    const aspectRatio = imageRequestAspectRatio(config.size || "auto");
+    const imageSize = config.resolution && config.resolution !== "auto" ? config.resolution : undefined;
+    const defaults = { contents: [{ role: "user", parts }] };
+    const payloadBody = config.advancedConfig?.protocol === "custom"
+        ? buildProviderRequest(config.advancedConfig.requestTemplate, defaults, { parts, prompt: parts[0].text, model: config.model })
+        : defaults;
+    const generationConfig = {
+        ...("generationConfig" in payloadBody && payloadBody.generationConfig && typeof payloadBody.generationConfig === "object" ? payloadBody.generationConfig : {}),
+        responseModalities: ["TEXT", "IMAGE"],
+        ...(imageSize || aspectRatio ? { imageConfig: { ...(imageSize ? { imageSize } : {}), ...(aspectRatio ? { aspectRatio } : {}) } } : {}),
+    };
     const response = await imageSubmissionFetch(config, `${geminiApiUrl(config, "generateContent", origin)}`, {
         method: "POST",
         headers: geminiHeaders(config, cookie, imagePointsIdempotencyKey(task)),
-        body: JSON.stringify({
-            contents: [{ role: "user", parts }],
-            generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-        }),
+        body: JSON.stringify({ ...payloadBody, generationConfig }),
         cache: "no-store",
     });
     if (!response.ok) throw imageSubmissionResponseError(response.status, await readFetchError(response, "图片生成失败"));

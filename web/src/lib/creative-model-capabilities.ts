@@ -47,24 +47,24 @@ export function reconcileCreativeGenerationPreferences(preferences: CreativeGene
     const imageModels = models.filter((model) => model.capability === "image");
     const imageProfile = creativeSelectedModelProfile(models, "image");
     if (imageModels.length) {
-        const image = reconcileMediaPreferences(preferences.image || {}, imageProfile || {}, imageModels.length);
+        const image = reconcileMediaPreferences(preferences.image || {}, imageProfile || {});
         if (image !== preferences.image) next = { ...next, image };
     }
     const videoModels = models.filter((model) => model.capability === "video");
     const videoProfile = creativeSelectedModelProfile(models, "video");
     if (videoModels.length) {
-        const video = reconcileVideoPreferences(preferences.video || {}, videoProfile || {}, videoModels.length);
+        const video = reconcileVideoPreferences(preferences.video || {}, videoProfile || {});
         if (video !== preferences.video) next = { ...next, video };
     }
     return next;
 }
 
-function reconcileMediaPreferences<T extends { size?: string; quality?: string; count?: number }>(value: T, profile: CreativeModelCapabilityProfile, minimumCount: number): T {
+function reconcileMediaPreferences<T extends { size?: string; quality?: string; resolution?: string; count?: number }>(value: T, profile: CreativeModelCapabilityProfile): T {
     let next = value;
     const size = reconcileSizeValue(value.size, profile.aspectRatios);
-    const quality = reconcileTextValue(value.quality, profile.resolutions);
-    const count = Math.max(minimumCount, Math.min(value.count || 1, profile.maxBatchSize || Number.POSITIVE_INFINITY));
-    if (size !== value.size || quality !== value.quality || count !== value.count) next = { ...value, size, quality, count };
+    const resolutions = profile.resolutions?.filter((item) => /^(?:auto|1k|2k|4k)$/i.test(item));
+    const resolution = reconcileTextValue(value.resolution, resolutions?.length ? resolutions : undefined);
+    if (size !== value.size || resolution !== value.resolution) next = { ...value, size, resolution };
     return next;
 }
 
@@ -79,8 +79,10 @@ function reconcileSizeValue(value: string | undefined, supported: string[] | und
     return reconcileTextValue(value, supported);
 }
 
-function reconcileVideoPreferences<T extends { size?: string; quality?: string; count?: number; seconds?: number }>(value: T, profile: CreativeModelCapabilityProfile, minimumCount: number): T {
-    let next = reconcileMediaPreferences(value, profile, minimumCount);
+function reconcileVideoPreferences<T extends { size?: string; quality?: string; count?: number; seconds?: number }>(value: T, profile: CreativeModelCapabilityProfile): T {
+    let next = reconcileMediaPreferences(value, { ...profile, resolutions: undefined });
+    const quality = reconcileTextValue(value.quality, profile.resolutions);
+    if (quality !== next.quality) next = { ...next, quality };
     const seconds = reconcileSeconds(value.seconds, profile);
     if (seconds !== value.seconds) next = { ...next, seconds };
     return next;

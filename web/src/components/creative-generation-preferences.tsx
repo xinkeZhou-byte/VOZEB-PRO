@@ -18,6 +18,7 @@ export type MediaCapability = "image" | "video" | "audio";
 export type CreativeGenerationPreferencePatch = {
     size?: string;
     quality?: string;
+    resolution?: string;
     count?: number;
     seconds?: number;
     generateAudio?: boolean;
@@ -39,11 +40,6 @@ const imageRatios = [
     { value: "2:3", label: "2:3", width: 15, height: 23 },
     { value: "3:4", label: "3:4", width: 16, height: 21 },
     { value: "9:16", label: "9:16", width: 14, height: 24 },
-    { value: "2048x2048", label: "2K 1:1", width: 18, height: 18 },
-    { value: "2048x1152", label: "2K 16:9", width: 24, height: 14 },
-    { value: "1152x2048", label: "2K 9:16", width: 14, height: 24 },
-    { value: "3840x2160", label: "4K 16:9", width: 24, height: 14 },
-    { value: "2160x3840", label: "4K 9:16", width: 14, height: 24 },
 ] as const;
 
 const videoRatios = [
@@ -61,6 +57,13 @@ const imageQualityOptions = [
     { value: "high", label: "高画质", shortLabel: "高" },
     { value: "medium", label: "中画质", shortLabel: "中" },
     { value: "low", label: "低画质", shortLabel: "低" },
+] as const;
+
+const imageResolutionOptions = [
+    { value: "auto", label: "智能" },
+    { value: "1K", label: "1K" },
+    { value: "2K", label: "2K" },
+    { value: "4K", label: "4K" },
 ] as const;
 
 const videoQualityOptions = [
@@ -117,6 +120,17 @@ export function generationResolutionOptions(capability: MediaCapability, profile
         });
     const smart = defaults.find((option) => option.value === "auto")!;
     return [smart, ...configured.filter((option, index, options) => options.findIndex((item) => normalizeResolution(item.value) === normalizeResolution(option.value)) === index)];
+}
+
+function imageGenerationResolutionOptions(profile?: CreativeModelCapabilityProfile) {
+    const supported = profile?.resolutions?.filter((value) => /^(?:1k|2k|4k)$/i.test(value.trim()));
+    if (!supported?.length) return [...imageResolutionOptions];
+    return [
+        imageResolutionOptions[0],
+        ...supported
+            .map((value) => ({ value: value.toUpperCase(), label: value.toUpperCase() }))
+            .filter((option, index, options) => options.findIndex((item) => item.value === option.value) === index),
+    ];
 }
 
 function generationDurationOptions(profile?: CreativeModelCapabilityProfile) {
@@ -333,7 +347,7 @@ function PreferencePanel({
     onChange: (patch: CreativeGenerationPreferencePatch) => void;
 }) {
     const ratios = generationRatioOptions(capability, capabilityProfile);
-    const qualityOptions = generationResolutionOptions(capability, capabilityProfile);
+    const qualityOptions = capability === "image" ? imageQualityOptions : generationResolutionOptions(capability, capabilityProfile);
     const durationOptions = generationDurationOptions(capabilityProfile);
     const selectedSize = capability === "image" ? preferences.image?.size || "auto" : preferences.video?.size || "auto";
     const selectedQuality = capability === "image" ? preferences.image?.quality || "auto" : preferences.video?.quality || "auto";
@@ -392,6 +406,9 @@ function PreferencePanel({
 
             {section === "canvas" ? (
                 <div className={cn("grid min-w-0", compact ? "gap-2" : "gap-2.5")}>
+                    {capability === "image" && !fixedSizeLabel && !parseCustomDimensions(selectedSize) ? (
+                        <CompactOptionGroup label="分辨率" ariaLabel="选择图片分辨率" value={preferences.image?.resolution || "auto"} options={imageGenerationResolutionOptions(capabilityProfile)} onChange={(resolution) => onChange({ resolution })} />
+                    ) : null}
                     {capability === "video" && videoReferenceContent ? (
                         videoReferenceContent
                     ) : capability === "video" ? (
@@ -733,7 +750,11 @@ export function generationPreferenceSummary(capability: MediaCapability, prefere
     const sizeLabel = size === "auto" ? "智能比例" : formatSizeLabel(size, capability);
     const qualityLabel = capability === "image" ? imageQualityOptions.find((item) => item.value === quality)?.label || quality : videoQualityLabel(quality);
     const referenceLabel = capability === "video" ? videoReferenceModeOptions.find((item) => item.value === (preferences.video?.referenceMode || "reference"))?.label : undefined;
-    if (capability === "image") return size === "auto" && quality === "auto" ? `智能参数${countLabel}` : `${sizeLabel} · ${qualityLabel}${countLabel}`;
+    if (capability === "image") {
+        const resolution = preferences.image?.resolution || "auto";
+        const resolutionLabel = resolution === "auto" ? "智能分辨率" : resolution;
+        return size === "auto" && quality === "auto" && resolution === "auto" ? `智能参数${countLabel}` : `${sizeLabel} · ${resolutionLabel}${quality !== "auto" ? ` · ${qualityLabel}` : ""}${countLabel}`;
+    }
     const parameterLabel = size === "auto" && quality === "auto" ? "智能参数" : `${sizeLabel} · ${qualityLabel}`;
     const audioLabel = (preferences.video?.generateAudio ?? true) ? "有声" : "无声";
     const watermarkLabel = (preferences.video?.watermark ?? false) ? "带水印" : "无水印";

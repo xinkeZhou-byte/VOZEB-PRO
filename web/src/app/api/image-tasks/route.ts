@@ -174,7 +174,7 @@ export async function POST(request: Request) {
                     capability: "image",
                     referenceCount: references.length,
                     aspectRatio: config.size,
-                    resolution: config.quality,
+                    resolution: config.resolution,
                 });
                 return true;
             } catch {

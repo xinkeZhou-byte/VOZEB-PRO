@@ -176,10 +176,8 @@ export function CreativeGenerationControls({
 
 function ModelPlatformIcon({ model }: { model: CreativeModelOption }) {
     const identity = `${model.id} ${model.name}`.toLowerCase();
-    if (/gemini|veo|imagen/.test(identity))
-        return (
-            <BrandIcon path="M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81" />
-        );
+    if (/gemini|google|nano[-_.\s]?banana|veo|imagen/.test(identity)) return <img src="/icons/gemini.svg" alt="" className="size-4" />;
+    if (/gpt|openai|dall[-_.\s]?e|chatgpt/.test(identity)) return <img src="/icons/openai.svg" alt="" className="size-4 dark:invert" />;
     if (/seedance|doubao|bytedance/.test(identity))
         return <BrandIcon path="M19.8772 1.4685L24 2.5326v18.9426l-4.1228 1.0563V1.4685zm-13.3481 9.428l4.115 1.0641v8.9786l-4.115 1.0642v-11.107zM0 2.572l4.115 1.0642v16.7354L0 21.428V2.572zm17.4553 5.6205v11.107l-4.1228-1.0642V9.2568l4.1228-1.0642z" />;
     if (/wan|qwen|tongyi/.test(identity))

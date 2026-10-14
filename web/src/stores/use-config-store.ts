@@ -77,6 +77,7 @@ type LogicalModel = {
 };
 
 export type AiConfig = {
+    resolution?: string;
     apiSource: "system" | "custom";
     channelMode: "remote" | "local";
     baseUrl: string;

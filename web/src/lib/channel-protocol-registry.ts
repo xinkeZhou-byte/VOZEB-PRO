@@ -433,9 +433,21 @@ export function channelProtocolValidationErrors(channel: SystemModelChannel) {
         const protocol = config?.protocol || advanced.protocol;
         const definition = channelProtocolDefinition(protocol);
         if (protocol === "custom") {
-            if (!config?.createPath) errors.push(`${model} 的自定义协议缺少创建路径`);
-            if (!config?.requestTemplate) errors.push(`${model} 的自定义协议缺少请求模板`);
-            if (!config?.resultField && config?.capability !== "audio") errors.push(`${model} 的自定义协议缺少结果字段`);
+            const customConfig = config ||
+                (advanced.protocol === "custom"
+                    ? {
+                          capability: advanced.modelCapabilities?.[key] || inferModelCapability(model),
+                          apiFormat: channel.apiFormat,
+                          protocol: "custom" as const,
+                          createPath: advanced.createPath,
+                          requestTemplate: advanced.requestTemplate,
+                          resultField: advanced.resultField,
+                      }
+                    : undefined);
+            if (!customConfig?.createPath) errors.push(`${model} 的自定义协议缺少创建路径`);
+            if (!customConfig?.requestTemplate) errors.push(`${model} 的自定义协议缺少请求模板`);
+            const isGeminiImage = customConfig?.capability === "image" && (customConfig.apiFormat || channel.apiFormat) === "gemini";
+            if (!customConfig?.resultField && customConfig?.capability !== "audio" && !isGeminiImage) errors.push(`${model} 的自定义协议缺少结果字段`);
             continue;
         }
         if (!definition.strict) continue;

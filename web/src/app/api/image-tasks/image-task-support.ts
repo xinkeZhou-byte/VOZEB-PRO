@@ -311,6 +311,11 @@ export function imagePointsIdempotencyKey(task: Pick<ImageTask, "id" | "attemptN
 }
 
 export function geminiApiUrl(config: ImageTaskConfig, action: "generateContent", origin: string) {
+    const configured = resolveChannelModelConfig(config.advancedConfig, config.model)?.createPath || config.advancedConfig?.createPath;
+    if (configured && /:generateContent$/i.test(configured)) {
+        const path = configured.replace(/\{\{\s*model\s*\}\}|\{model\}|:model\b|YOUR_GEMINI_MODEL/gi, encodeURIComponent(config.model.replace(/^models\//, "")));
+        return taskUrl(config, path, origin);
+    }
     const baseUrl = normalizeApiBaseUrl(config.baseUrl, "gemini", origin);
     return `${baseUrl}/models/${encodeURIComponent(config.model.replace(/^models\//, ""))}:${action}`;
 }

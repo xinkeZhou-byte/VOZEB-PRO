@@ -3,7 +3,7 @@ import { GenerationSubmissionSafeFailure } from "@/lib/server/generation-submiss
 
 import { DEFAULT_IMAGE_SHORT_SIDE, IMAGE_MIN_PIXELS, IMAGE_SIZE_STEP, QUALITY_ALIASES, QUALITY_BASE } from "./image-task-types";
 
-export function resolveRequestSize(quality: string | undefined, size: string) {
+export function resolveRequestSize(quality: string | undefined, size: string, resolution?: string) {
     try {
         const value = size.trim();
         if (!value || value.toLowerCase() === "auto") return undefined;
@@ -12,7 +12,15 @@ export function resolveRequestSize(quality: string | undefined, size: string) {
             validateImageDimensions(dimensions.width, dimensions.height);
             return upstreamImageSize(dimensions.width, dimensions.height);
         }
-        if (value.includes(":")) return resolveSize(quality, value);
+        if (value.includes(":")) {
+            const longSide = resolution?.match(/^([124])k$/i)?.[1];
+            if (longSide) {
+                const ratio = parseImageRatio(value);
+                const scale = (Number(longSide) * 1024) / Math.max(ratio.width, ratio.height);
+                return `${Math.round(ratio.width * scale)}x${Math.round(ratio.height * scale)}`;
+            }
+            return resolveSize(quality, value);
+        }
         throw new Error("图片尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
     } catch (error) {
         if (error instanceof GenerationSubmissionSafeFailure) throw error;
@@ -20,18 +28,19 @@ export function resolveRequestSize(quality: string | undefined, size: string) {
     }
 }
 
-export function resolveResultSize(quality: string | undefined, size: string) {
+export function resolveResultSize(quality: string | undefined, size: string, resolution?: string) {
     const value = size.trim();
     const dimensions = parseImageDimensions(value);
     if (dimensions) {
         validateImageDimensions(dimensions.width, dimensions.height);
         return `${dimensions.width}x${dimensions.height}`;
     }
+    if (resolution && resolution !== "auto") return undefined;
     const qualityValue = String(quality || "")
         .trim()
         .toLowerCase();
     const normalizedQuality = QUALITY_ALIASES[qualityValue] || qualityValue;
-    return resolveRequestSize(QUALITY_BASE[normalizedQuality] ? normalizedQuality : undefined, value);
+    return resolveRequestSize(QUALITY_BASE[normalizedQuality] ? normalizedQuality : undefined, value, resolution);
 }
 
 export function imageRequestAspectRatio(size: string) {

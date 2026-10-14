@@ -36,9 +36,9 @@ export function GenerationOperationsClient() {
     const requestVersion = useRef(0);
     const detailTask = data?.items.find((task) => task.id === detailId);
 
-    const load = useCallback(async () => {
+    const load = useCallback(async (background = false) => {
         const version = ++requestVersion.current;
-        setLoading(true);
+        if (!background) setLoading(true);
         try {
             const query = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
             if (type) query.set("type", type);
@@ -48,7 +48,7 @@ export function GenerationOperationsClient() {
             const payload = await getGenerationOperations(query);
             if (version === requestVersion.current) setData(payload);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "任务数据加载失败");
+            if (version === requestVersion.current) message.error(error instanceof Error ? error.message : "任务数据加载失败");
         } finally {
             if (version === requestVersion.current) setLoading(false);
         }
@@ -62,7 +62,7 @@ export function GenerationOperationsClient() {
     }, [load]);
     useAdminGenerationChanges(
         (data?.items || []).map((task) => `${task.type}:${task.id}`),
-        load,
+        () => load(true),
     );
 
     const runAction = async (task: AdminGenerationTask, action: "cancel" | "retry") => {

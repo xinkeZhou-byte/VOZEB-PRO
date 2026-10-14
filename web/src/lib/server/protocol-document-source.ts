@@ -53,6 +53,8 @@ export async function readProtocolDocumentSource(documentationUrl: string): Prom
     }
 
     const rootDocument = extractProtocolHtmlDocument(root.text, root.url);
+    const dynamicDocument = await readModuleDocument(rootDocument.modules, root.url);
+    if (dynamicDocument) return dynamicDocument;
     const links = selectProtocolDocumentLinks(rootDocument.links, root.url);
     if (!links.length) {
         return {
@@ -98,7 +100,70 @@ export function extractProtocolHtmlDocument(source: string, sourceUrl = "http://
     return {
         text: visibleNodeText(article || root),
         links: discoverDocumentLinks(root, source, sourceUrl),
+        modules: discoverModuleScripts(root, sourceUrl),
     };
+}
+
+async function readModuleDocument(modules: string[], rootUrl: string): Promise<ProtocolDocumentSource | null> {
+    const origin = new URL(rootUrl).origin;
+    const warnings: string[] = [];
+    for (const moduleUrl of modules) {
+        try {
+            const module = await fetchProtocolPage(moduleUrl, origin);
+            const resources = Array.from(new Set(Array.from(module.text.matchAll(/["']([^"'\s]+\.json)["']/g), (match) => new URL(match[1], module.url).toString())));
+            for (const resourceUrl of resources.filter((url) => new URL(url).origin === origin)) {
+                const resource = await fetchProtocolPage(resourceUrl, origin);
+                const data: unknown = JSON.parse(resource.text);
+                if (!isRecord(data) || !Array.isArray(data.pages)) continue;
+                const pages = data.pages.filter(isRecord);
+                const selected = new URL(rootUrl).searchParams.get("page");
+                const visiblePages = selected ? pages.filter((page) => page.slug === selected) : pages;
+                const textLines = documentNodeText(pages).split("\n");
+                const context = textLines
+                    .filter((line, index) =>
+                        (/(?:GET\s+)?\/v\d+(?:beta)?\/models\b|API\s*基础地址|base\s*url|[A-Z][A-Z0-9_]*_BASE/i.test(line) && !/:generateContent|streamGenerateContent/i.test(line)) ||
+                        /API\s*基础地址|base\s*url/i.test(textLines[index - 1] || ""),
+                    )
+                    .map((line) => line.replace(/^curl.*?(\/v\d+(?:beta)?\/models)["']?.*$/i, "GET $1"))
+                    .join("\n");
+                const groups = visiblePages.map((page) => ({
+                    key: String(page.slug || "document"),
+                    label: String(page.title || "文档"),
+                    sourceUrls: [rootUrl, resource.url],
+                    text: [context, documentNodeText(page)].filter(Boolean).join("\n\n"),
+                }));
+                if (groups.length) return { groups, warnings, sourcePages: 3 };
+            }
+        } catch (error) {
+            warnings.push(`动态文档：${error instanceof Error ? error.message : "读取失败"}`);
+        }
+    }
+    return null;
+}
+
+function discoverModuleScripts(root: HtmlNode, sourceUrl: string) {
+    const modules = new Set<string>();
+    const visit = (node: HtmlNode) => {
+        const attributes = Object.fromEntries((node.attrs || []).map(({ name, value }) => [name.toLowerCase(), value]));
+        if (node.tagName === "script" && attributes.type === "module" && attributes.src) {
+            const url = new URL(attributes.src, sourceUrl);
+            if (url.origin === new URL(sourceUrl).origin) modules.add(url.toString());
+        }
+        node.childNodes?.forEach(visit);
+    };
+    visit(root);
+    return Array.from(modules);
+}
+
+function documentNodeText(value: unknown): string {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) return value.map(documentNodeText).filter(Boolean).join("\n");
+    if (!isRecord(value)) return "";
+    return ["title", "description", "text", "headers", "rows", "sections", "blocks"].map((key) => documentNodeText(value[key])).filter(Boolean).join("\n");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export function selectProtocolDocumentLinks(urls: string[], rootUrl: string) {

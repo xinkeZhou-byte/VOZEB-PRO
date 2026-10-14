@@ -61,6 +61,7 @@ const templateVariables = new Set([
     "speed",
     "references",
     "content",
+    "parts",
 ]);
 
 export function parseDeterministicProtocolDraft(input: { text: string; documentationUrl?: string }): ChannelProtocolDraft | null {
@@ -73,18 +74,19 @@ export function parseDeterministicProtocolDraft(input: { text: string; documenta
             const advanced = parsed.patch.advancedConfig || emptyAdvancedConfig();
             const request = exampleRequestLine(text);
             if (request && looksLikeModelCatalogPath(request.path)) return [];
+            if (request && /:streamGenerateContent$/i.test(request.path)) return [];
             const role = requestRole(request);
             const capability = parsedCapability(advanced) || capabilityFromPath(request?.path || "");
             if (!capability) return [];
             const explicitPath = request && !request.absolute ? request.path : "";
-            const createPath = role === "create" ? explicitPath || advanced.createPath : "";
+            const createPath = role === "create" ? (parsed.patch.apiFormat === "gemini" ? advanced.createPath : explicitPath || advanced.createPath) : "";
             const config: SystemChannelModelConfig = {
                 capability,
                 source: "manual",
                 protocol: "custom",
                 apiFormat: parsed.patch.apiFormat || "openai",
                 ...(createPath ? { createPath } : {}),
-                ...(advanced.editPath ? { editPath: explicitPath || advanced.editPath } : {}),
+                ...(advanced.editPath ? { editPath: parsed.patch.apiFormat === "gemini" ? advanced.editPath : explicitPath || advanced.editPath } : {}),
                 ...(advanced.imageToVideoPath ? { imageToVideoPath: explicitPath || advanced.imageToVideoPath } : {}),
                 ...(role === "query" && request ? { queryPath: request.path } : role === "create" && advanced.queryPath ? { queryPath: advanced.queryPath } : {}),
                 ...(role === "cancel" && request ? { cancelPath: request.path, cancelMethod: request.method === "DELETE" ? "DELETE" : "POST" } : {}),
@@ -125,6 +127,8 @@ export function parseDeterministicProtocolDraft(input: { text: string; documenta
 }
 
 function inferDocumentedBaseUrl(source: string, operations: Array<ChannelProtocolOperationDraft & { baseUrl?: string }>) {
+    const documented = source.match(/(?:API\s*基础地址|base[_\s]*url|[A-Z][A-Z0-9_]*_BASE)\s*(?:=|:|：)?\s*["']?(https?:\/\/[^\s"'\\<>]+)/i)?.[1];
+    if (documented) return cleanUrl(documented);
     const requestUrls = Array.from(source.matchAll(/(?:curl(?:\s+--url)?|GET|POST|PUT|PATCH|DELETE)\s+["']?(https?:\/\/[^\s"'\\<>]+)/gi), (match) => match[1].replace(/[),.;]+$/g, ""));
     const operationPaths = operations.flatMap((operation) => [operation.config.createPath, operation.config.editPath, operation.config.imageToVideoPath].filter((path): path is string => Boolean(path))).sort((left, right) => right.length - left.length);
     for (const value of requestUrls) {
@@ -235,7 +239,7 @@ function exampleRequestLine(source: string): ExampleRequestLine | null {
 
     const curl = source.match(/(?:^|\n)\s*curl\b([\s\S]*?)(?=\n\s*(?:curl\b|GET|POST|PUT|PATCH|DELETE)\s+|$)/i)?.[1] || "";
     if (!curl) return null;
-    const urlValue = curl.match(/--url(?:=|\s+)(["']?)(https?:\/\/[^\s"'\\<>]+|\/(?!\/)[^\s"'\\<>]+)\1/i)?.[2] || curl.match(/(?:^|\s)(["']?)(https?:\/\/[^\s"'\\<>]+|\/(?!\/)[^\s"'\\<>]+)\1/i)?.[2];
+    const urlValue = curl.match(/--url(?:=|\s+)(["']?)(https?:\/\/[^\s"'\\<>]+|\/(?!\/)[^\s"'\\<>]+)\1/i)?.[2] || curl.match(/(?:^|\s)(["']?)(https?:\/\/[^\s"'\\<>]+|\/(?!\/)[^\s"'\\<>]+)\1/i)?.[2] || curl.match(/["']\$(?:\{[\w]+\}|[\w]+)(\/[^\s"'\\<>]+)["']/)?.[1];
     if (!urlValue) return null;
     const method = curl.match(/(?:--request(?:=|\s+)|-X\s+)(GET|POST|PUT|PATCH|DELETE)\b/i)?.[1] || (/(?:--data(?:-[a-z]+)?|--form(?:=|\s+)|(?:^|\s)-[dF]\s)/i.test(curl) ? "POST" : "GET");
     return normalizeExampleRequest(method, urlValue);
@@ -252,7 +256,7 @@ function normalizeExampleRequest(methodValue: string, value: string): ExampleReq
             return null;
         }
     }
-    path = path.replace(/\{(?:task[_-]?id|id)\}|:(?:task[_-]?id|taskId|id)\b/gi, ":task_id");
+    path = path.replace(/\$\{?TASK_ID\}?|\{(?:task[_-]?id|id)\}|:(?:task[_-]?id|taskId|id)\b/gi, ":task_id");
     return isApiPath(path) ? { method: methodValue.toUpperCase() as ExampleRequestLine["method"], path, absolute } : null;
 }
 
@@ -274,7 +278,7 @@ function capabilityFromPath(path: string): LogicalModelCapability | null {
 function parsedCapability(config: ReturnType<typeof emptyAdvancedConfig>): LogicalModelCapability | null {
     const evidence = `${config.createPath}\n${config.requestTemplate}\n${config.resultField}`;
     if (config.videoModel || config.imageToVideoPath || /video|videos|i2v|t2v|video_url|\.mp4/i.test(evidence)) return "video";
-    if (config.imageModel || config.editPath || /image|images|txt2img|img2img|image_url|b64_json/i.test(evidence)) return "image";
+    if (config.imageModel || config.editPath || /image|images|txt2img|img2img|image_url|b64_json|inlineData/i.test(evidence)) return "image";
     if (config.textModel || /chat|responses|completions|choices\[0\]\.message/i.test(evidence)) return "text";
     if (/audio|speech|voice|tts|music|sound|binary/i.test(evidence)) return "audio";
     return null;
@@ -366,6 +370,7 @@ function uniqueModels(value: unknown[]) {
 }
 
 function isConcreteModel(value: string) {
+    if (/^your[_-]/i.test(value)) return false;
     return !/^\s*(?:\{\{[^{}]+\}\}|<[^<>]+>|\[[^\[\]]+\]|model(?:[-_ ]?(?:id|name))?|your[-_ ]?model|authorization|api[-_ ]?key|token|bearer|string|required|example|placeholder|x+)\s*$/i.test(value);
 }
 
@@ -387,6 +392,7 @@ function hasUnsafeObjectKey(value: unknown): boolean {
 }
 
 function deterministicAuth(source: string): Pick<ChannelProtocolDraft, "authMode" | "authHeader" | "authPrefix"> {
+    if (/\bx-goog-api-key\s*:/i.test(source)) return { authMode: "custom-header", authHeader: "x-goog-api-key" };
     if (/\bx-api-key\s*:/i.test(source)) return { authMode: "x-api-key" };
     const header = source.match(/(?:--header|-H)\s+["']([^:"']+)\s*:\s*([^"']+)["']/i);
     if (header && !/^(?:authorization|content-type|accept|user-agent)$/i.test(header[1].trim())) {

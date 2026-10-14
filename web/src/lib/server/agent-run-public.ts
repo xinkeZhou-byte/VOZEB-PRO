@@ -51,6 +51,7 @@ function publicAgentRunTask(task: AgentRunTask) {
         optimizedPrompt: optimizedPrompt || undefined,
         ratio: task.ratio,
         quality: task.quality,
+        resolution: task.resolution,
         seconds: task.seconds,
         voice: task.voice,
         format: task.format,

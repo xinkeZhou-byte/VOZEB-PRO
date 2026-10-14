@@ -112,7 +112,7 @@ export function deletePreparedImageTaskResults(results: StoredImageTaskMediaResu
 }
 
 async function persistPreparedResults(task: ImageTask, results: ImageTaskMediaResult[], requireAll: boolean, storageKeys?: string[]) {
-    const targetSize = task.config.outputMode === "layers" ? undefined : resolveResultSize(task.config.quality, task.config.size || "auto");
+    const targetSize = task.config.outputMode === "layers" ? undefined : resolveResultSize(task.config.quality, task.config.size || "auto", task.config.resolution);
     const settled = await Promise.allSettled(
         results.map(async (item, index) => {
             const existing = storageKeys?.[index] ? await registeredCheckpointResult(task, storageKeys[index]) : null;

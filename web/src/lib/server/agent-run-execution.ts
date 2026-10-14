@@ -245,6 +245,7 @@ export function normalizeTasks(
                 concretePreferredQuality ||
                 concretePlannedQuality ||
                 (!smartQuality ? textDefault(item.type === "video" ? defaults.vquality : defaults.quality) || (item.type === "video" ? globalDefaults.videoQuality : item.type === "image" ? globalDefaults.imageQuality : undefined) : "auto"),
+            resolution: item.type === "image" ? generationPreferences?.image?.resolution : undefined,
             seconds: item.type === "video" && generationPreferences?.video?.seconds ? generationPreferences.video.seconds : resolveAgentVideoSeconds(item.type, item.seconds, defaults.videoSeconds, globalDefaults.videoSeconds),
             voice: item.type === "audio" ? generationPreferences?.audio?.voice || item.voice?.trim() || textDefault(defaults.voice) || globalDefaults.audioVoice : item.voice?.trim() || textDefault(defaults.voice),
             format: item.type === "audio" ? generationPreferences?.audio?.format || item.format?.trim() || textDefault(defaults.format) || globalDefaults.audioFormat : item.format?.trim() || textDefault(defaults.format),
@@ -317,6 +318,7 @@ function directModelAllocations(models: DirectAgentModelOption[], preferences?: 
         const peers = models.filter((model) => model.capability === capability);
         if (!peers.length) continue;
         const requested = capability === "image" ? preferences?.image?.count : capability === "video" ? preferences?.video?.count : undefined;
+        if (requested !== undefined && requested < peers.length) throw new Error(`已选择 ${peers.length} 个${capability === "image" ? "图片" : "视频"}模型，每个模型至少生成 1 份，请增加总数量或减少模型`);
         let remaining = Math.max(requested || peers.length, peers.length) - peers.length;
         peers.forEach((model) => counts.set(model.id, 1));
         while (remaining > 0) {
@@ -339,7 +341,7 @@ function directModelAllocations(models: DirectAgentModelOption[], preferences?: 
 function assertAgentTaskCapabilities(settings: Awaited<ReturnType<typeof getAuthSettings>>, task: AgentRunTask) {
     if (!task.model) return;
     const candidates = resolveLogicalModelCandidates(settings, task.type, task.model);
-    const input = { capability: task.type, batchSize: task.count, durationSeconds: task.seconds, aspectRatio: task.ratio, resolution: task.quality } as const;
+    const input = { capability: task.type, batchSize: task.count, durationSeconds: task.seconds, aspectRatio: task.ratio, resolution: task.type === "image" ? task.resolution : task.quality } as const;
     if (candidates.some((candidate) => allowsCapability(candidate.capabilityProfile, input))) return;
     assertCapabilityConstraints(candidates[0]?.capabilityProfile, input);
     throw new Error("当前模型没有支持所选生成参数的可用渠道");
@@ -722,7 +724,7 @@ export async function dispatchTask(task: AgentRunTask, origin: string, cookie: s
         apiKey: "",
         apiFormat: channel.apiFormat || "openai",
         model,
-        ...(task.type === "image" ? { ...(task.quality ? { quality: task.quality } : {}), ...(task.ratio ? { size: task.ratio } : {}) } : {}),
+        ...(task.type === "image" ? { ...(task.quality ? { quality: task.quality } : {}), ...(task.resolution ? { resolution: task.resolution } : {}), ...(task.ratio ? { size: task.ratio } : {}) } : {}),
         ...(task.type === "video"
             ? {
                   ...(task.ratio ? { size: task.ratio } : {}),

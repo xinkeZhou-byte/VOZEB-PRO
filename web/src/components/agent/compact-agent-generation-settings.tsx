@@ -45,7 +45,7 @@ export function compactAgentPreferenceSummary(capability: AgentMediaCapability, 
     }
     const image = preferences.image;
     const size = image?.size && image.size !== "auto" ? image.size.replace("x", "×") : "智能";
-    return isExactSize(image?.size) ? size : `${size} · ${image?.count || 1}张`;
+    return isExactSize(image?.size) ? size : `${size}${image?.resolution && image.resolution !== "auto" ? ` · ${image.resolution}` : ""} · ${image?.count || 1}张`;
 }
 
 function agentPreferenceSummary(capability: AgentMediaCapability, preferences: CreativeGenerationPreferences) {
@@ -58,7 +58,8 @@ function agentPreferenceSummary(capability: AgentMediaCapability, preferences: C
     const image = preferences.image;
     const size = image?.size && image.size !== "auto" ? image.size.replace("x", "×") : "智能";
     const quality = ({ high: "高", medium: "中", low: "低", auto: "智能" } as const)[image?.quality || "auto"];
-    return size === "智能" && quality === "智能" && (image?.count || 1) === 1 ? "智能参数" : `${size} · ${quality}${(image?.count || 1) > 1 ? ` · ${image?.count}张` : ""}`;
+    const resolution = image?.resolution && image.resolution !== "auto" ? image.resolution : "智能分辨率";
+    return size === "智能" && quality === "智能" && resolution === "智能分辨率" && (image?.count || 1) === 1 ? "智能参数" : `${size} · ${resolution} · ${quality}${(image?.count || 1) > 1 ? ` · ${image?.count}张` : ""}`;
 }
 
 export function updateAgentGenerationPreferences(preferences: CreativeGenerationPreferences, capability: AgentMediaCapability, patch: CreativeGenerationPreferencePatch): CreativeGenerationPreferences {
@@ -66,6 +67,7 @@ export function updateAgentGenerationPreferences(preferences: CreativeGeneration
         const image = { ...preferences.image };
         if (patch.size !== undefined) image.size = patch.size;
         if (patch.quality !== undefined) image.quality = patch.quality;
+        if (patch.resolution !== undefined) image.resolution = patch.resolution;
         if (patch.count !== undefined) image.count = patch.count;
         return { ...preferences, mode: "image", image };
     }

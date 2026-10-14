@@ -24,6 +24,7 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
         image: {
             size: config.size || "auto",
             quality: imageQuality(config.quality),
+            resolution: config.resolution || "auto",
             count: positiveInteger(config.count),
         },
     };
@@ -55,12 +56,13 @@ export function canvasImagePreferenceSummary(preferences: GenerationPreferences,
     if (!fixedSizeLabel && /^\d+x\d+$/i.test(image?.size || "")) return size;
     const quality = ({ auto: "智能", high: "高", medium: "中", low: "低" } as Record<string, string>)[image?.quality || "auto"] || image?.quality || "智能";
     const count = image?.count || 1;
-    return `${size} · ${quality}${count > 1 ? ` · ${count}张` : ""}`;
+    return `${size}${image?.resolution && image.resolution !== "auto" ? ` · ${image.resolution}` : ""} · ${quality}${count > 1 ? ` · ${count}张` : ""}`;
 }
 
 function applyImagePreferencePatch(patch: CreativeGenerationPreferencePatch, onChange: (key: keyof AiConfig, value: string) => void) {
     if (patch.size !== undefined) onChange("size", patch.size);
     if (patch.quality !== undefined) onChange("quality", patch.quality);
+    if (patch.resolution !== undefined) onChange("resolution", patch.resolution);
     if (patch.count !== undefined) onChange("count", String(patch.count));
 }
 

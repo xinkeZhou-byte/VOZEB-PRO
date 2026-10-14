@@ -122,7 +122,7 @@ export type CreativeRunEvent = {
 export type CreativeGenerationMode = "image" | "video" | "audio";
 export type CreativeGenerationPreferences = {
     mode?: CreativeGenerationMode;
-    image?: { size?: string; quality?: string; count?: number };
+    image?: { size?: string; resolution?: string; quality?: string; count?: number };
     video?: {
         size?: string;
         quality?: string;
@@ -210,9 +210,12 @@ function normalizeImagePreferences(value: unknown) {
     const size = normalizePreferenceSize(input.size);
     const rawQuality = optionalText(input.quality, 40);
     const quality = isCreativeAutoValue(rawQuality) ? "auto" : rawQuality;
+    const rawResolution = optionalText(input.resolution, 40);
+    const resolution = isCreativeAutoValue(rawResolution) ? "auto" : rawResolution?.toUpperCase();
+    if (resolution && !["auto", "1K", "2K", "4K"].includes(resolution)) throw new CreativeRuntimeInputError("图片分辨率必须为智能、1K、2K 或 4K");
     const count = Number(input.count);
     const normalizedCount = Number.isSafeInteger(count) && count > 0 ? count : undefined;
-    return size || quality || normalizedCount ? { ...(size ? { size } : {}), ...(quality ? { quality } : {}), ...(normalizedCount ? { count: normalizedCount } : {}) } : undefined;
+    return size || quality || resolution || normalizedCount ? { ...(size ? { size } : {}), ...(quality ? { quality } : {}), ...(resolution ? { resolution } : {}), ...(normalizedCount ? { count: normalizedCount } : {}) } : undefined;
 }
 
 function normalizeVideoPreferences(value: unknown) {

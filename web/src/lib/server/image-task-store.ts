@@ -22,6 +22,7 @@ export type ImageTaskConfig = {
     upstreamRouteCiphertext?: string;
     capabilityProfile?: LogicalModelCapabilityProfile;
     quality?: string;
+    resolution?: string;
     size?: string;
     outputBackground?: "opaque" | "transparent";
     outputMode?: "layers";
