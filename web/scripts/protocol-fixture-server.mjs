@@ -132,6 +132,9 @@ async function handleFixtureRequest({ request, response, url, body, tasks, reque
         });
     }
 
+    if (request.method === "POST" && path === "/interactions") {
+        return sendJson(response, 200, { id: nextTaskId("gemini-image"), status: "completed", steps: [{ type: "model_output", content: [{ type: "image", mime_type: "image/png", data: (await fixtureImage(options)).toString("base64") }] }] });
+    }
     if (request.method === "POST" && /\/models\/[^/]+:(?:generateContent|streamGenerateContent)$/.test(path)) {
         const payload = jsonBody(body);
         if (payload.generationConfig?.responseModalities?.includes("IMAGE")) {
@@ -427,7 +430,7 @@ function toolArguments(name, payload) {
                 brief: { objective: "验证 Canvas Agent 稳定生成链路" },
                 direction: { summary: "清晰的蓝色横版测试画面" },
             },
-            deliverables: [{ id: "fixture-image", title: "协议测试图片", type: "image", model: "mock-image", prompt: "生成一张蓝色横版协议测试图片", count: 1, ratio: "16:9", quality: "high", dependencies: [] }],
+            deliverables: [{ id: "fixture-image", title: "协议测试图片", type: "image", model: "mock-image", prompt: "生成一张蓝色横版协议测试图片", count: 1, ratio: "16:9", quality: "high", assetIds: plannerReferencedAssetIds(payload), dependencies: [] }],
         };
     }
     if (name === "plan_workbench_action") {

@@ -21,6 +21,7 @@ import { createSignedReferenceAssetUrl, signReferenceAssetInputUrl } from "@/lib
 import { assertCapabilityConstraints } from "@/lib/server/capability-constraints";
 import { GenerationSubmissionSafeFailure, GenerationSubmissionUncertainError } from "@/lib/server/generation-submission-error";
 import { buildProviderRequest } from "@/lib/server/provider-task-config";
+import { runGeminiInteractionImageTask } from "./image-task-gemini-interactions";
 
 import {
     type CreateImageTaskBody,
@@ -125,6 +126,7 @@ import {
 } from "./image-task-support";
 
 export async function runGeminiImageTask(task: ImageTask, origin: string, cookie: string): Promise<ImageTaskRunResult> {
+    if (task.config.advancedConfig?.protocol === "gemini-image") return runGeminiInteractionImageTask(task, origin, cookie);
     const config = task.config;
     const maskInstruction = task.mask ? "\n\n最后一张图片是编辑蒙版：透明区域需要重新生成，白色不透明区域必须保持原图。只补全透明区域，不要把蒙版当作画面内容。" : "";
     const parts: GeminiPart[] = [{ text: withSystemPrompt(config, withImageOutputInstructions(config, buildImageReferencePromptText(task.prompt, task.references) + maskInstruction)) }];

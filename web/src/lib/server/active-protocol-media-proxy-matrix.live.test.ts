@@ -31,6 +31,7 @@ vi.mock("@/lib/server/media-concurrency", () => ({ acquireMediaConcurrency: () =
 vi.mock("@/lib/server/proxy-dispatcher", () => ({ configureServerProxyDispatcher: vi.fn() }));
 
 import { runCustomImageTask, pollCustomImageTask } from "@/app/api/image-tasks/image-task-custom";
+import { runGeminiImageTask } from "@/app/api/image-tasks/image-task-gemini";
 import { runOpenAiImageTask } from "@/app/api/image-tasks/image-task-openai";
 import { GET as proxyGet, HEAD as proxyHead, POST as proxyPost } from "@/app/api/ai/system/[channelId]/[...path]/route";
 import { PATCH as saveAdminSettings } from "@/app/api/admin/settings/route";
@@ -344,7 +345,7 @@ function imageTask(channel: ProxyChannel, edit: boolean): ImageTask {
 
 async function runImage(task: ImageTask, protocol: SystemChannelProtocol) {
     const declarative = protocol === "custom" || protocol === "stable-diffusion" || protocol === "yumeng";
-    const submitted = declarative ? await runCustomImageTask(task, INTERNAL_ORIGIN, fixtureOrigin, "", true) : await runOpenAiImageTask(task, INTERNAL_ORIGIN, fixtureOrigin, "", true);
+    const submitted = protocol === "gemini-image" ? await runGeminiImageTask(task, INTERNAL_ORIGIN, "") : declarative ? await runCustomImageTask(task, INTERNAL_ORIGIN, fixtureOrigin, "", true) : await runOpenAiImageTask(task, INTERNAL_ORIGIN, fixtureOrigin, "", true);
     if (!submitted.pending) return submitted;
     await createStoredGenerationTask("image", task, 60_000);
     await scheduleGenerationTask("image", task.id, { executionPhase: "submitted", upstreamTaskId: submitted.pending.id, channelId: task.config.channelId });

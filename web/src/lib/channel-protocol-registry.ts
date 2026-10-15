@@ -13,6 +13,7 @@ export type ChannelProtocolDefinition = {
     description: string;
     apiFormat: ApiCallFormat;
     authMode: SystemChannelAuthMode;
+    authHeader?: string;
     defaultBaseUrl?: string;
     modelCatalogPaths: string[];
     capabilities: LogicalModelCapability[];
@@ -145,11 +146,35 @@ export const registeredChannelProtocolDefinitions: ChannelProtocolDefinition[] =
         strict: true,
     },
     {
+        id: "gemini-image",
+        label: "Google Gemini 图片",
+        description: "Google Gemini Interactions 原生图片生成与编辑协议。",
+        apiFormat: "gemini",
+        authMode: "custom-header",
+        authHeader: "x-goog-api-key",
+        defaultBaseUrl: "https://generativelanguage.googleapis.com",
+        modelCatalogPaths: ["/v1beta/models"],
+        capabilities: ["image"],
+        operations: {
+            image: {
+                capability: "image",
+                createPath: "/interactions",
+                editPath: "/interactions",
+                requestTemplate: '{"model":"{{model}}","input":"{{input}}","response_format":{"type":"image"}}',
+                resultField: "steps[].content[].data",
+                referenceRule: "参考图使用 input 中的 image 内容块，以 base64 data 和 mime_type 提交。",
+                supportsReferenceImage: true,
+            },
+        },
+        strict: true,
+    },
+    {
         id: "gemini",
         label: "Google Gemini / Veo",
         description: "Google Gemini API 的 Veo 异步视频协议，使用 predictLongRunning 与 operation 轮询。",
         apiFormat: "gemini",
         authMode: "custom-header",
+        authHeader: "x-goog-api-key",
         defaultBaseUrl: "https://generativelanguage.googleapis.com",
         modelCatalogPaths: ["/v1beta/models"],
         capabilities: ["video"],
@@ -380,6 +405,7 @@ export function applyChannelProtocol(channel: SystemModelChannel, protocol: Syst
             ...advanced,
             protocol,
             authMode: definition.authMode,
+            ...(definition.authHeader ? { authHeader: definition.authHeader } : {}),
             modelCatalogPaths: definition.modelCatalogPaths,
             ...primaryAdvanced,
             modelConfigs,
@@ -390,7 +416,7 @@ export function applyChannelProtocol(channel: SystemModelChannel, protocol: Syst
 }
 
 export function protocolAuthHeaders(apiKey: string, input: Pick<SystemChannelAdvancedConfig, "protocol" | "authMode" | "authHeader" | "authPrefix"> | undefined, fallback: ApiCallFormat = "openai"): Record<string, string> {
-    if (input?.protocol === "gemini") return { "x-goog-api-key": apiKey };
+    if (input?.protocol === "gemini" || input?.protocol === "gemini-image") return { "x-goog-api-key": apiKey };
     const mode = resolveChannelAuthMode(input);
     if (mode === "none") return {};
     if (fallback === "gemini" && !input?.authMode) return { "x-goog-api-key": apiKey };

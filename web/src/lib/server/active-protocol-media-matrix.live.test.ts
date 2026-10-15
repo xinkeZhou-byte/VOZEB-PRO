@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runCustomImageTask, pollCustomImageTask } from "@/app/api/image-tasks/image-task-custom";
+import { runGeminiImageTask } from "@/app/api/image-tasks/image-task-gemini";
 import { runOpenAiImageTask } from "@/app/api/image-tasks/image-task-openai";
 import { createUpstream } from "@/app/api/video-generation-tasks/video-generation-route";
 import type { SystemChannelProtocol } from "@/lib/auth/store-types";
@@ -39,7 +40,7 @@ describe("active media protocols over TCP fixtures", () => {
     it.each(STRICT_IMAGE_PROTOCOLS)("completes $id image creation with its registered request shape", async (definition) => {
         const model = definition.builtInModels?.find((item) => item.capability === "image")?.id || "mock-image";
         const operation = definition.operations.image!;
-        const baseUrl = operation.createPath === "/images/generations" ? `${origin}/v1` : origin;
+        const baseUrl = definition.id === "gemini-image" ? `${origin}/v1beta` : operation.createPath === "/images/generations" ? `${origin}/v1` : origin;
         const task = imageTask(baseUrl, model, definition.id, imageConfig(definition.id));
         const result = await runImageTask(task, definition.id);
         await expectImageResult(result);
@@ -49,7 +50,7 @@ describe("active media protocols over TCP fixtures", () => {
     it.each(STRICT_IMAGE_PROTOCOLS.filter((definition) => definition.operations.image?.supportsReferenceImage))("completes $id image editing with a transmitted reference", async (definition) => {
         const model = definition.builtInModels?.find((item) => item.capability === "image")?.id || "mock-image";
         const operation = definition.operations.image!;
-        const baseUrl = operation.createPath === "/images/generations" ? `${origin}/v1` : origin;
+        const baseUrl = definition.id === "gemini-image" ? `${origin}/v1beta` : operation.createPath === "/images/generations" ? `${origin}/v1` : origin;
         const task = imageTask(baseUrl, model, definition.id, imageConfig(definition.id), true);
         const result = await runImageTask(task, definition.id);
         await expectImageResult(result);
@@ -131,7 +132,7 @@ function imageTask(baseUrl: string, model: string, protocol: string, advancedCon
         status: "running",
         createdAt: 1,
         updatedAt: 1,
-        config: { baseUrl, apiKey: "fixture-key", apiFormat: "openai", model, channelId: `fixture-${protocol}`, ...(advancedConfig ? { advancedConfig } : {}) },
+        config: { baseUrl, apiKey: "fixture-key", apiFormat: protocol === "gemini-image" ? "gemini" : "openai", model, channelId: `fixture-${protocol}`, ...(advancedConfig ? { advancedConfig } : {}) },
         candidateConfigs: [],
         prompt: "create a blue protocol test image",
         references: edit
@@ -148,6 +149,7 @@ function imageTask(baseUrl: string, model: string, protocol: string, advancedCon
 }
 
 function imageConfig(protocol: string) {
+    if (protocol === "gemini-image") return { ...emptyAdvancedConfig(), ...protocolModelConfig("gemini-image", "image") };
     if (protocol === "stable-diffusion") {
         return { ...emptyAdvancedConfig(), ...protocolModelConfig("stable-diffusion", "image") };
     }
@@ -199,7 +201,7 @@ function videoConfig(protocol: SystemChannelProtocol, baseUrl: string, model: st
 
 async function runImageTask(task: ImageTask, protocol: SystemChannelProtocol) {
     const declarative = protocol === "stable-diffusion" || protocol === "yumeng";
-    const submitted = declarative ? await runCustomImageTask(task, origin, origin, "", protocol === "yumeng") : await runOpenAiImageTask(task, origin, origin, "", true);
+    const submitted = protocol === "gemini-image" ? await runGeminiImageTask(task, origin, "") : declarative ? await runCustomImageTask(task, origin, origin, "", protocol === "yumeng") : await runOpenAiImageTask(task, origin, origin, "", true);
     return submitted.pending ? pollCustomImageTask(task, submitted.pending.id, submitted.pending.mediaBaseUrl, submitted.pending.pollBaseUrl, "") : submitted;
 }
 

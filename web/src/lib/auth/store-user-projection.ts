@@ -6,7 +6,7 @@ import { DEFAULT_ENTITLEMENT_SETTINGS } from "./store-foundation";
 import { normalizePointAmount, normalizePoints, resolveDefaultPlan, resolveUserPlan } from "./store-normalizers";
 import { type AuthDatabase, type PublicUser, type PublicUserSummary, type StoredUser, type UserRole, type UserStatus } from "./store-types";
 
-export function toPublicUser(user: StoredUser, db?: Pick<AuthDatabase, "settings" | "dailyPlanPointWallets">): PublicUser {
+export function toPublicUser(user: StoredUser, db?: Pick<AuthDatabase, "settings" | "dailyPlanPointWallets"> & Partial<Pick<AuthDatabase, "sessions">>): PublicUser {
     const plan = db ? resolveUserPlan(db, user) : DEFAULT_ENTITLEMENT_SETTINGS.plans[0];
     const clock = walletClock();
     const defaultPlan = db ? resolveDefaultPlan(db.settings.entitlements) : DEFAULT_ENTITLEMENT_SETTINGS.plans[0];
@@ -16,7 +16,16 @@ export function toPublicUser(user: StoredUser, db?: Pick<AuthDatabase, "settings
     const configuredDailyPoints = db && freePlan ? db.settings.freeDailyPoints : plan.dailyPoints;
     const dailyPoints = dailyEnabled ? (wallet?.remainingPoints ?? Math.max(0, normalizePoints(configuredDailyPoints, 0))) : 0;
     return buildPublicUser(
-        user,
+        {
+            ...user,
+            lastLoginAt:
+                user.lastLoginAt ||
+                db?.sessions
+                    ?.filter((session) => session.userId === user.id)
+                    .map((session) => session.createdAt)
+                    .sort()
+                    .at(-1),
+        },
         { id: plan.id, name: plan.name, hasActivePlan: !freePlan },
         {
             permanentPoints: normalizePoints(user.pointsBalance, 0),

@@ -105,6 +105,7 @@ export class UsersRepository {
             `
             SELECT
                 users.*,
+                COALESCE(users.last_login_at, (SELECT max(sessions.created_at) FROM sessions WHERE sessions.user_id = users.id)) AS last_login_at,
                 resolved_plan.id AS resolved_plan_id,
                 resolved_plan.name AS resolved_plan_name,
                 resolved_plan.daily_points AS resolved_plan_daily_points,

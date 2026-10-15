@@ -153,6 +153,7 @@ export async function createSession(userId: string) {
             const repos = createPostgresRepositories(client);
             const user = await repos.users.getById(userId, true);
             if (!user || user.status !== "active") throw new AuthInputError("用户不可用");
+            await repos.users.update(userId, { lastLoginAt: now.toISOString() });
             await repos.sessions.create({
                 id: sessionId,
                 userId,
@@ -170,6 +171,8 @@ export async function createSession(userId: string) {
         const now = new Date();
         const sessionId = randomUUID();
         const token = randomBytes(32).toString("base64url");
+        user.lastLoginAt = now.toISOString();
+        user.updatedAt = user.lastLoginAt;
         db.sessions.push({
             id: sessionId,
             userId,

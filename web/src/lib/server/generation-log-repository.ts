@@ -91,11 +91,11 @@ export async function normalizeAssets(assets: Array<Partial<GenerationLogAsset> 
 }
 
 export async function writeDataUrlAsset(dataUrl: string, type: GenerationLogKind, context: GenerationAssetContext): Promise<GenerationLogAsset | null> {
-    const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
-    if (!match) return null;
+    const match = dataUrl.match(/^data:([^;,]+);base64,/);
+    if (!match || dataUrl.length === match[0].length) return null;
     const mimeType = match[1] || (type === "video" ? "video/mp4" : "image/png");
     if (!mimeType.startsWith(`${type}/`)) return null;
-    const bytes = Buffer.from(match[2], "base64");
+    const bytes = Buffer.from(dataUrl.slice(match[0].length), "base64");
     if (bytes.length > maxServerAssetBytes(type)) return null;
     return writeAssetBytes(bytes, mimeType, type, context);
 }

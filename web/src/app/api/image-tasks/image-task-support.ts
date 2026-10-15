@@ -700,8 +700,8 @@ export function parseGeminiImagePayload(payload: GeminiPayload) {
 }
 
 export function toGeminiImagePart(dataUrl: string, fallbackType?: string): GeminiPart {
-    const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
-    if (match) return { inlineData: { mimeType: match[1], data: match[2] } };
+    const match = dataUrl.match(/^data:([^;,]+);base64,/);
+    if (match && dataUrl.length > match[0].length) return { inlineData: { mimeType: match[1], data: dataUrl.slice(match[0].length) } };
     return { fileData: { fileUri: dataUrl, mimeType: fallbackType || "image/png" } };
 }
 
@@ -761,9 +761,9 @@ export async function imageReferenceToDataUrl(reference: ImageTaskReference, nam
 }
 
 export function dataUrlToFile(dataUrl: string, name: string, fallbackType?: string) {
-    const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
+    const match = dataUrl.match(/^data:([^;,]+);base64,/);
     if (!match) throw new Error("参考图不是有效 base64 图片");
-    const bytes = Buffer.from(match[2], "base64");
+    const bytes = Buffer.from(dataUrl.slice(match[0].length), "base64");
     if (!bytes.length) throw new Error("参考图读取失败");
     return new File([bytes], name, { type: fallbackType || match[1] || "image/png" });
 }

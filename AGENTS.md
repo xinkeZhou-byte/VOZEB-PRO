@@ -25,6 +25,8 @@
 
 ## 后端规范
 
+- 大型媒体 Data URL 只允许对头部执行正则匹配，再按头部长度截取 Base64 并交给 Buffer 等成熟解码器；禁止对完整媒体正文执行带捕获的大范围正则，以免大图在 V8 中触发栈溢出。
+
 - 后端使用 Next.js Route Handler + TypeScript，服务端代码位于 `web/src/app/api/` 与 `web/src/lib/server/`。
 - Route Handler 只处理 HTTP 入参、鉴权、调用服务和响应映射，不堆业务规则或数据库细节。
 - `web/src/lib/server/` 放业务服务、领域校验、任务编排和 provider 适配。
